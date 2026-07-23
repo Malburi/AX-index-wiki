@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "dead_code.json",
+  "type": "object",
+  "required": ["_meta", "unused_methods", "unused_sql_ids", "unused_jsps"],
+  "properties": {
+    "_meta": { "$ref": "_meta.schema.json" },
+    "unused_methods": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "file", "line", "reason"],
+        "properties": {
+          "id": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "visibility": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "unused_sql_ids": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "file", "line", "reason"],
+        "properties": {
+          "id": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "unused_jsps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "reason"],
+        "properties": {
+          "file": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}

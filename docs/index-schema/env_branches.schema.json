@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "env_branches.json",
+  "type": "object",
+  "required": ["_meta", "branches"],
+  "properties": {
+    "_meta": { "$ref": "_meta.schema.json" },
+    "profiles": { "type": "array", "items": { "type": "string" } },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "type", "marker"],
+        "properties": {
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "type": { "type": "string", "enum": ["annotation", "config_file", "code_if"] },
+          "marker": { "type": "string" },
+          "method": { "type": "string" },
+          "values_per_profile": { "type": "object" }
+        }
+      }
+    }
+  }
+}

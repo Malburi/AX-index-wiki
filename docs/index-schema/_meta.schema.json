@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "_meta (모든 인덱스 파일 공통)",
+  "type": "object",
+  "required": ["generated_at", "generator", "mode"],
+  "properties": {
+    "generated_at": { "type": "string" },
+    "generator": { "type": "string" },
+    "version": { "type": "string" },
+    "source_root": { "type": "string" },
+    "mode": { "type": "string", "enum": ["init", "incremental", "feature-scoped"] },
+    "node_count": { "type": "integer" },
+    "edge_count": { "type": "integer" },
+    "source_file_count": { "type": "integer" },
+    "latest_source_commit": { "type": ["string", "null"] },
+    "latest_source_mtime": { "type": "string" },
+    "tier": { "type": "string", "enum": ["Lite", "Standard", "Full"] },
+    "indexes": { "type": "array", "items": { "type": "string" } },
+    "init_layout": { "type": "string", "enum": ["single-root", "monorepo", "paired-roots", "selected-paths"] },
+    "include_paths": { "type": "array", "items": { "type": "string" } },
+    "workspace_mode": { "type": "boolean" },
+    "workspaces": { "type": "array" },
+    "unresolved_count": { "type": "integer" },
+    "ai_enrichment": { "type": "object" },
+    "adapter_coverage": {
+      "type": "object",
+      "required": ["status", "full_files", "partial_files", "unsupported_files", "extensions"],
+      "properties": {
+        "status": { "type": "string", "enum": ["FULL", "PARTIAL", "WARN"] },
+        "full_files": { "type": "integer", "minimum": 0 },
+        "partial_files": { "type": "integer", "minimum": 0 },
+        "unsupported_files": { "type": "array", "items": { "type": "string" } },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["extension", "level", "files"],
+            "properties": {
+              "extension": { "type": "string" },
+              "level": { "type": "string", "enum": ["FULL", "PARTIAL"] },
+              "files": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "complexity": {
+      "type": "object",
+      "required": ["score", "signals", "recommended_tier", "selected_tier", "selection"],
+      "properties": {
+        "score": { "type": "integer", "minimum": 0 },
+        "signals": {
+          "type": "object",
+          "required": ["source_files", "db_or_orm", "legacy_stack", "multi_module", "external_system"],
+          "properties": {
+            "source_files": { "type": "integer", "minimum": 0 },
+            "db_or_orm": { "type": "integer", "minimum": 0 },
+            "legacy_stack": { "type": "integer", "minimum": 0 },
+            "multi_module": { "type": "integer", "minimum": 0 },
+            "external_system": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "recommended_tier": { "type": "string", "enum": ["Lite", "Standard", "Full"] },
+        "selected_tier": { "type": "string", "enum": ["Lite", "Standard", "Full"] },
+        "selection": { "type": "string", "enum": ["deterministic-auto", "user-override"] }
+      }
+    },
+    "analysis_budget": {
+      "type": "object",
+      "required": ["initial_ai_calls_per_target", "targeted_retries_per_target", "unresolved_batch_size", "large_index_direct_read"],
+      "properties": {
+        "initial_ai_calls_per_target": { "type": "integer", "minimum": 0 },
+        "targeted_retries_per_target": { "type": "integer", "minimum": 0 },
+        "unresolved_batch_size": { "type": "integer", "minimum": 1 },
+        "large_index_direct_read": { "type": "boolean" }
+      }
+    }
+  }
+}

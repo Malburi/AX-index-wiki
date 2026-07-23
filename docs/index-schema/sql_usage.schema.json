@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "sql_usage.json",
+  "type": "object",
+  "required": ["_meta", "sqls", "usages"],
+  "properties": {
+    "_meta": { "$ref": "_meta.schema.json" },
+    "sqls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "file", "line", "type"],
+        "properties": {
+          "id": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "type": { "type": "string", "enum": ["select", "insert", "update", "delete", "ddl"] },
+          "tables": { "type": "array", "items": { "type": "string" } },
+          "columns_selected": { "type": "array", "items": { "type": "string" } },
+          "columns_where": { "type": "array", "items": { "type": "string" } },
+          "text_preview": { "type": "string" }
+        }
+      }
+    },
+    "usages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sql_id", "file", "line", "method"],
+        "properties": {
+          "sql_id": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "method": { "type": "string" }
+        }
+      }
+    }
+  }
+}

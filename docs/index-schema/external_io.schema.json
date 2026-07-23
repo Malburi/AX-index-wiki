@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "external_io.json",
+  "type": "object",
+  "required": ["_meta", "communications"],
+  "properties": {
+    "_meta": { "$ref": "_meta.schema.json" },
+    "communications": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "file", "line"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "method": { "type": "string" },
+          "target": { "type": "string" },
+          "topic": { "type": "string" },
+          "timeout_ms": { "type": "integer" },
+          "retry_policy": { "type": "string" },
+          "in_transaction": { "type": "boolean" },
+          "operation": { "type": "string" },
+          "path_pattern": { "type": "string" }
+        }
+      }
+    }
+  }
+}

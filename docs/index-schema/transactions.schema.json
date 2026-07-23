@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "transactions.json",
+  "type": "object",
+  "required": ["_meta", "boundaries"],
+  "properties": {
+    "_meta": { "$ref": "_meta.schema.json" },
+    "boundaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "entry_method", "file", "line", "methods_in_scope"],
+        "properties": {
+          "id": { "type": "string" },
+          "entry_method": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "marker": { "type": "string" },
+          "propagation": { "type": "string" },
+          "isolation": { "type": "string" },
+          "rollback_for": { "type": "array", "items": { "type": "string" } },
+          "methods_in_scope": { "type": "array", "items": { "type": "string" } },
+          "external_io_calls": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["target", "type"],
+              "properties": {
+                "target": { "type": "string" },
+                "type": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

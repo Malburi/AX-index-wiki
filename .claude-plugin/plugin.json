@@ -1,0 +1,11 @@
+{
+  "name": "AX-Index-Wiki",
+  "version": "0.1.0",
+  "description": "AX-Harness에서 추출한 결정적 인덱스 생성 + 근거 기반 프로젝트 위키 플러그인. 2 agents (analyzer, wiki-builder) + 3 skills (index-init, build-wiki, pair-init). 기본 경로는 AI 0회 MJS이며 의미 분석·서술 보강만 제한된 AI 호출을 사용한다.",
+  "author": {
+    "name": "Malburi",
+    "url": "https://github.com/Malburi"
+  },
+  "license": "MIT",
+  "keywords": ["harness", "agents", "skills", "index", "call-graph", "wiki", "code-analysis", "legacy", "cross-repo"]
+}

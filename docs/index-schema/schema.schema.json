@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "schema.json (DB 스키마 스냅샷)",
+  "type": "object",
+  "required": ["_meta", "tables"],
+  "properties": {
+    "_meta": { "$ref": "_meta.schema.json" },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "columns", "primary_key"],
+        "properties": {
+          "name": { "type": "string" },
+          "schema": { "type": "string" },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "type", "nullable"],
+              "properties": {
+                "name": { "type": "string" },
+                "type": { "type": "string" },
+                "nullable": { "type": "boolean" },
+                "default": {},
+                "primary_key": { "type": "boolean" }
+              }
+            }
+          },
+          "primary_key": { "type": "array", "items": { "type": "string" } },
+          "foreign_keys": { "type": "array" },
+          "indexes": { "type": "array" },
+          "row_count_estimate": { "type": ["integer", "null"] }
+        }
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "from_table", "from_columns", "to_table", "to_columns", "confidence"],
+        "properties": {
+          "type": { "type": "string", "enum": ["foreign_key", "query_join"] },
+          "name": { "type": "string" },
+          "from_table": { "type": "string" },
+          "from_columns": { "type": "array", "items": { "type": "string" } },
+          "to_table": { "type": "string" },
+          "to_columns": { "type": "array", "items": { "type": "string" } },
+          "sql_id": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "evidence": { "type": "string" },
+          "origin": { "type": "string" },
+          "confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] }
+        }
+      }
+    },
+    "views": { "type": "array" },
+    "procedures": { "type": "array" },
+    "functions": { "type": "array" },
+    "triggers": { "type": "array" }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "call_graph.json",
+  "type": "object",
+  "required": ["_meta", "nodes", "edges"],
+  "properties": {
+    "_meta": { "$ref": "_meta.schema.json" },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "file", "line"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "visibility": { "type": "string" },
+          "static": { "type": "boolean" },
+          "annotations": { "type": "array", "items": { "type": "string" } },
+          "signature": { "type": "string" }
+          ,"workspace": { "type": "string" }
+          ,"origin": { "type": "string", "enum": ["deterministic-indexer", "ai-enrichment", "analyzer-fallback"] }
+          ,"confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to", "type"],
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "type": { "type": "string", "enum": ["call", "inject", "inherit", "reflect", "ui_event", "markup_event", "scheduler", "process_entry"] },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] }
+          ,"workspace": { "type": "string" }
+          ,"origin": { "type": "string", "enum": ["deterministic-indexer", "ai-enrichment", "analyzer-fallback"] }
+          ,"confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] }
+          ,"evidence": { "type": "string" }
+        }
+      }
+    }
+  }
+}

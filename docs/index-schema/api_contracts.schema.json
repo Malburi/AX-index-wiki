@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "api_contracts.json",
+  "type": "object",
+  "required": ["_meta", "endpoints", "consumers", "matches", "unmatched_endpoints", "unmatched_consumers"],
+  "properties": {
+    "_meta": { "$ref": "_meta.schema.json" },
+    "endpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "workspace", "source", "method", "path", "handler", "file", "line"],
+        "properties": {
+          "id": { "type": "string" },
+          "workspace": { "type": "string" },
+          "source": { "type": "string", "enum": ["local", "external"] },
+          "external_repo_path": { "type": "string" },
+          "method": { "type": "string" },
+          "path": { "type": "string" },
+          "path_pattern": { "type": "string" },
+          "handler": { "type": "string" },
+          "framework": { "type": "string" },
+          "router": { "type": "string" },
+          "prefix_resolved": { "type": "boolean" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "request_shape": { "type": "object" },
+          "response_shape": { "type": "object" },
+          "auth_required": { "type": ["boolean", "null"] }
+          ,"origin": { "type": "string", "enum": ["deterministic-indexer", "ai-enrichment", "api-bridge", "analyzer-fallback"] }
+          ,"confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] }
+        }
+      }
+    },
+    "consumers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "workspace", "source", "call_type", "method", "path_literal", "file", "line"],
+        "properties": {
+          "id": { "type": "string" },
+          "workspace": { "type": "string" },
+          "source": { "type": "string", "enum": ["local", "external"] },
+          "external_repo_path": { "type": "string" },
+          "call_type": { "type": "string" },
+          "method": { "type": "string" },
+          "path_literal": { "type": "string" },
+          "path_pattern": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "function": { "type": "string" }
+          ,"origin": { "type": "string", "enum": ["deterministic-indexer", "ai-enrichment", "api-bridge", "analyzer-fallback"] }
+          ,"confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] }
+        }
+      }
+    },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["endpoint_id", "consumer_id", "match_type", "confidence"],
+        "properties": {
+          "endpoint_id": { "type": "string" },
+          "consumer_id": { "type": "string" },
+          "match_type": { "type": "string", "enum": ["path_pattern", "path_literal", "heuristic_string_match"] },
+          "confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] },
+          "shape_match": { "type": "string", "enum": ["MATCH", "MISMATCH", "UNKNOWN"] },
+          "notes": { "type": "string" }
+          ,"origin": { "type": "string", "enum": ["deterministic-indexer", "ai-enrichment", "api-bridge", "analyzer-fallback"] }
+        }
+      }
+    },
+    "unmatched_endpoints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "unmatched_consumers": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

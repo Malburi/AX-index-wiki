@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ax-harness.local/schema/wiki-narrative.schema.json",
+  "title": "AX-Harness Wiki Narrative",
+  "type": "object",
+  "required": [
+    "version",
+    "generated_at",
+    "source_generated_at",
+    "generation",
+    "system_overview",
+    "business_capabilities",
+    "critical_user_journeys",
+    "architecture",
+    "onboarding"
+  ],
+  "properties": {
+    "version": { "const": 2 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "source_generated_at": {
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "object", "additionalProperties": { "type": "string", "format": "date-time" } }
+      ]
+    },
+    "generation": {
+      "type": "object",
+      "required": ["mode", "ai_calls"],
+      "properties": {
+        "mode": { "enum": ["standard", "deep"] },
+        "ai_calls": { "const": 1 }
+      },
+      "additionalProperties": false
+    },
+    "system_overview": {
+      "type": "object",
+      "required": ["title", "purpose", "users", "business_outcomes", "evidence"],
+      "properties": {
+        "title": { "type": "string" },
+        "purpose": { "type": "string" },
+        "users": { "$ref": "#/$defs/strings" },
+        "business_outcomes": { "$ref": "#/$defs/strings" },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    },
+    "business_capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "summary", "actors", "entry_points", "data", "evidence"],
+        "properties": {
+          "name": { "type": "string" },
+          "summary": { "type": "string" },
+          "actors": { "$ref": "#/$defs/strings" },
+          "entry_points": { "$ref": "#/$defs/strings" },
+          "data": { "$ref": "#/$defs/strings" },
+          "evidence": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "critical_user_journeys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "actor", "trigger", "steps", "success", "failure_paths", "operational_checks", "evidence"],
+        "properties": {
+          "name": { "type": "string" },
+          "actor": { "type": "string" },
+          "trigger": { "type": "string" },
+          "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+          "success": { "type": "string" },
+          "failure_paths": { "$ref": "#/$defs/strings" },
+          "operational_checks": { "$ref": "#/$defs/strings" },
+          "evidence": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "required": ["style", "summary", "evidence", "layers", "runtime_flow", "boundaries", "decisions"],
+      "properties": {
+        "style": { "type": "string" },
+        "summary": { "type": "string" },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "layers": { "type": "array" },
+        "runtime_flow": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+        "boundaries": { "type": "array" },
+        "decisions": { "type": "array" }
+      }
+    },
+    "onboarding": {
+      "type": "object",
+      "required": ["first_day", "first_week", "reading_order", "local_run", "safe_first_tasks", "do_not_change_without", "first_pr_definition_of_done", "debugging_entry_points"],
+      "properties": {
+        "first_day": { "$ref": "#/$defs/strings" },
+        "first_week": { "$ref": "#/$defs/strings" },
+        "reading_order": { "type": "array" },
+        "local_run": { "$ref": "#/$defs/strings" },
+        "safe_first_tasks": { "$ref": "#/$defs/strings" },
+        "do_not_change_without": { "$ref": "#/$defs/strings" },
+        "first_pr_definition_of_done": { "$ref": "#/$defs/strings" },
+        "debugging_entry_points": { "type": "array" }
+      }
+    },
+    "risks": { "type": "array" },
+    "domains": { "type": "array" }
+  },
+  "$defs": {
+    "strings": { "type": "array", "items": { "type": "string" } },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^(?:[^:]+::)?[^:]+:[1-9][0-9]*$" }
+    },
+    "step": {
+      "type": "object",
+      "required": ["title", "description", "evidence"],
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    }
+  }
+}

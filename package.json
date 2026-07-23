@@ -1,0 +1,14 @@
+{
+  "name": "ax-index-wiki",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "index": "node scripts/build-index.mjs",
+    "query-index": "node scripts/query-index.mjs",
+    "validate-harness": "node scripts/validate-harness.mjs",
+    "refresh-pair": "node scripts/refresh-pair-index.mjs",
+    "build-wiki": "node scripts/build-wiki.mjs",
+    "ai-budget": "node scripts/ai-budget.mjs",
+    "test": "node scripts/tests/run.js"
+  }
+}
