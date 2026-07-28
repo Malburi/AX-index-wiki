@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export const INDEXER_VERSION = "1.6.0";
+export const INDEXER_VERSION = "1.7.0";
 
 const SOURCE_EXTENSIONS = new Set([
   ".java", ".kt", ".kts", ".js", ".jsx", ".ts", ".tsx", ".vue", ".py", ".cs", ".go",
@@ -811,10 +811,13 @@ function extractSchema(text, rel) {
     const columns = [];
     const primaryKey = [];
     const foreignKeys = [];
+    const uniqueConstraints = [];
     for (const raw of match[2].split(/,(?![^()]*\))/)) {
       const line = raw.trim();
-      const pk = line.match(/^primary\s+key\s*\(([^)]+)\)/i);
-      if (pk) { primaryKey.push(...pk[1].split(",").map((v) => v.trim().replace(/["`]/g, ""))); continue; }
+      // `CONSTRAINT pk_name PRIMARY KEY (...)` 형태의 명명된 제약도 인식해야
+      // 자식 테이블의 유일성을 근거로 1:1을 판정할 수 있다.
+      const pk = line.match(/^(?:constraint\s+["`]?[\w$]+["`]?\s+)?primary\s+key\s*\(([^)]+)\)/i);
+      if (pk) { primaryKey.push(...pk[1].split(",").map((v) => v.trim().replace(/["`]/g, "").split(/\s+/)[0])); continue; }
       const fk = line.match(/^(?:constraint\s+["`]?([\w$]+)["`]?\s+)?foreign\s+key\s*\(([^)]+)\)\s+references\s+([\w."`$]+)\s*\(([^)]+)\)/i);
       if (fk) {
         foreignKeys.push({
@@ -824,7 +827,18 @@ function extractSchema(text, rel) {
         });
         continue;
       }
-      if (/^(constraint|foreign|unique|check)\b/i.test(line)) continue;
+      // 테이블 레벨 UNIQUE는 1:1과 1:N을 가르는 유일한 DDL 근거라 버리지 않고 보존한다.
+      // `UNIQUE (...)`, `CONSTRAINT uq UNIQUE (...)`, MySQL `UNIQUE KEY uq (...)`를 모두 인식한다.
+      const uq = line.match(/^(?:constraint\s+["`]?([\w$]+)["`]?\s+)?unique(?:\s+(?:key|index))?(?:\s+["`]?([\w$]+)["`]?)?\s*\(([^)]+)\)/i);
+      if (uq) {
+        uniqueConstraints.push({
+          name: uq[1] || uq[2] || "",
+          columns: uq[3].split(",").map((value) => value.trim().replace(/["`]/g, "").split(/\s+/)[0]),
+          origin: "deterministic-indexer", confidence: "HIGH",
+        });
+        continue;
+      }
+      if (/^(constraint|foreign|check)\b/i.test(line)) continue;
       const column = line.match(/^["`]?([\w$]+)["`]?\s+([\w]+(?:\s*\([^)]*\))?)([\s\S]*)$/);
       if (!column) continue;
       const inlinePk = /primary\s+key/i.test(column[3]);
@@ -835,9 +849,16 @@ function extractSchema(text, rel) {
         references_columns: inlineFk[2].split(",").map((value) => value.trim().replace(/["`]/g, "")),
         origin: "deterministic-indexer", confidence: "HIGH",
       });
-      columns.push({ name: column[1], type: column[2], nullable: !/not\s+null/i.test(column[3]), primary_key: inlinePk });
+      columns.push({
+        name: column[1], type: column[2], nullable: !/not\s+null/i.test(column[3]),
+        primary_key: inlinePk, unique: /\bunique\b/i.test(column[3]),
+      });
     }
-    tables.push({ name: match[1].replace(/["`]/g, ""), columns, primary_key: [...new Set(primaryKey)], foreign_keys: foreignKeys, indexes: [], source_file: rel, origin: "deterministic-indexer", confidence: "MEDIUM" });
+    tables.push({
+      name: match[1].replace(/["`]/g, ""), columns, primary_key: [...new Set(primaryKey)],
+      foreign_keys: foreignKeys, unique_constraints: uniqueConstraints, indexes: [],
+      source_file: rel, origin: "deterministic-indexer", confidence: "MEDIUM",
+    });
   }
   for (const match of text.matchAll(/create\s+(unique\s+)?index\s+(?:if\s+not\s+exists\s+)?["`]?([\w$]+)["`]?\s+on\s+([\w."`$]+)\s*\(([^)]+)\)/gi)) {
     const tableName = match[3].replace(/["`]/g, "");
@@ -846,6 +867,219 @@ function extractSchema(text, rel) {
     table.indexes.push({ name: match[2], columns: match[4].split(",").map((value) => value.trim().replace(/["`]/g, "").split(/\s+/)[0]), unique: Boolean(match[1]), origin: "deterministic-indexer", confidence: "HIGH" });
   }
   return tables;
+}
+
+function columnKey(columns) {
+  return (columns || []).map((value) => String(value).replace(/["`]/g, "").toLowerCase()).sort().join(",");
+}
+
+function tableKey(name) {
+  return String(name || "").replace(/["`]/g, "").split(".").at(-1).toLowerCase();
+}
+
+// 컬럼 집합이 해당 테이블에서 유일성을 보장받는지 DDL 근거로만 판정한다.
+// 유일성이 확인되면 그 쪽 끝은 1, 확인되지 않으면 N이다.
+function uniquenessBasis(table, columns) {
+  if (!table || !columns?.length) return null;
+  const key = columnKey(columns);
+  if (!key) return null;
+  if (columnKey(table.primary_key) === key) {
+    return { basis: "primary_key", evidence: `PRIMARY KEY (${(table.primary_key || []).join(", ")})` };
+  }
+  for (const constraint of table.unique_constraints || []) {
+    if (columnKey(constraint.columns) === key) {
+      return { basis: "unique_constraint", evidence: constraint.name ? `UNIQUE ${constraint.name}` : `UNIQUE (${(constraint.columns || []).join(", ")})` };
+    }
+  }
+  for (const index of table.indexes || []) {
+    if (index.unique && columnKey(index.columns) === key) {
+      return { basis: "unique_index", evidence: `UNIQUE INDEX ${index.name}` };
+    }
+  }
+  if (columns.length === 1) {
+    const name = String(columns[0]).replace(/["`]/g, "").toLowerCase();
+    const column = (table.columns || []).find((item) => item.name.toLowerCase() === name);
+    if (column?.unique) return { basis: "unique_column", evidence: `${column.name} UNIQUE` };
+  }
+  return null;
+}
+
+// cardinality는 항상 from_table -> to_table 방향의 다중성이다.
+// foreign_key는 참조 대상 컬럼이 SQL 규칙상 유일하므로 자식 쪽 유일성만으로 1:1과 N:1을 가른다.
+function cardinalityOf(relation, tableIndex) {
+  if (relation.cardinality) return relation;
+  const from = tableIndex.get(tableKey(relation.from_table));
+  const to = tableIndex.get(tableKey(relation.to_table));
+  if (relation.type === "foreign_key") {
+    if (!from) return { ...relation, cardinality: "unknown", cardinality_basis: "child_table_not_indexed" };
+    const child = uniquenessBasis(from, relation.from_columns);
+    return child
+      ? { ...relation, cardinality: "one_to_one", cardinality_basis: `${child.basis}: ${child.evidence}` }
+      : { ...relation, cardinality: "many_to_one", cardinality_basis: "fk_columns_not_unique: 자식 쪽 유일 제약 없음" };
+  }
+  if (!from || !to) return { ...relation, cardinality: "unknown", cardinality_basis: "table_not_indexed: DDL 미발견" };
+  const fromUnique = uniquenessBasis(from, relation.from_columns);
+  const toUnique = uniquenessBasis(to, relation.to_columns);
+  const note = `${fromUnique ? `${relation.from_table}: ${fromUnique.evidence}` : `${relation.from_table}: 유일 제약 없음`} / ${toUnique ? `${relation.to_table}: ${toUnique.evidence}` : `${relation.to_table}: 유일 제약 없음`}`;
+  if (fromUnique && toUnique) return { ...relation, cardinality: "one_to_one", cardinality_basis: note };
+  if (fromUnique) return { ...relation, cardinality: "one_to_many", cardinality_basis: note };
+  if (toUnique) return { ...relation, cardinality: "many_to_one", cardinality_basis: note };
+  return { ...relation, cardinality: "many_to_many", cardinality_basis: note };
+}
+
+// 조인 테이블: FK 2개 이상의 컬럼 합집합이 그 테이블에서 유일하면 양쪽 부모는 N:M이다.
+// relations[]를 오염시키지 않기 위해 파생 관계는 derived_relations[]로 분리해 기록한다.
+function deriveManyToMany(tables) {
+  const derived = [];
+  for (const table of tables) {
+    const foreignKeys = (table.foreign_keys || []).filter((item) => (item.columns || []).length);
+    if (foreignKeys.length < 2) continue;
+    const basis = uniquenessBasis(table, foreignKeys.flatMap((item) => item.columns));
+    if (!basis) continue;
+    table.join_table = true;
+    for (let i = 0; i < foreignKeys.length; i += 1) {
+      for (let j = i + 1; j < foreignKeys.length; j += 1) {
+        derived.push({
+          type: "many_to_many", cardinality: "many_to_many",
+          from_table: foreignKeys[i].references_table, from_columns: foreignKeys[i].references_columns || [],
+          to_table: foreignKeys[j].references_table, to_columns: foreignKeys[j].references_columns || [],
+          via_table: table.name, via_columns: [...(foreignKeys[i].columns || []), ...(foreignKeys[j].columns || [])],
+          file: table.source_file, line: null,
+          evidence: `${table.name} 조인 테이블 (${basis.evidence})`,
+          cardinality_basis: `join_table:${basis.basis}`,
+          origin: "deterministic-indexer", confidence: "MEDIUM",
+        });
+      }
+    }
+  }
+  return derived;
+}
+
+const ORM_JAVA_CARDINALITY = { onetoone: "one_to_one", manytoone: "many_to_one", onetomany: "one_to_many", manytomany: "many_to_many" };
+const ORM_SEQUELIZE_CARDINALITY = { hasone: "one_to_one", belongsto: "many_to_one", hasmany: "one_to_many", belongstomany: "many_to_many" };
+
+// ORM 매핑은 카디널리티를 소스에 명시하므로 DDL이 없는 프로젝트에서도 1:1과 1:N을 확정할 수 있다.
+// 엔티티 이름만 알 수 있으므로 물리 테이블 매핑은 aggregate에서 전역 엔티티 맵으로 해석한다.
+function extractOrm(clean, rel, ext) {
+  const atLine = lineIndex(clean);
+  const entities = [];
+  const relations = [];
+  const addRelation = (item) => relations.push({ origin: "deterministic-indexer", confidence: "HIGH", ...item });
+
+  if (ext === ".java" || ext === ".kt") {
+    for (const match of clean.matchAll(/@Entity\b/g)) {
+      const window = clean.slice(match.index, match.index + 400);
+      const declaration = window.match(/\b(?:class|data\s+class)\s+([A-Za-z_$][\w$]*)/);
+      if (!declaration) continue;
+      const table = window.slice(0, declaration.index).match(/@Table\s*\([^)]*name\s*=\s*["']([^"']+)["']/i)?.[1];
+      entities.push({
+        name: declaration[1], table: table || declaration[1], table_resolved: Boolean(table), framework: "jpa",
+        file: rel, line: atLine(match.index), origin: "deterministic-indexer", confidence: table ? "HIGH" : "MEDIUM",
+      });
+    }
+    const owner = entities[0]?.name;
+    if (owner) {
+      for (const match of clean.matchAll(/@(OneToOne|ManyToOne|OneToMany|ManyToMany)\s*(\([^)]*\))?([\s\S]{0,400}?);/g)) {
+        const body = match[3];
+        const target = body.match(/\b(?:List|Set|Collection|Iterable|Optional)\s*<\s*([A-Za-z_$][\w$]*)\s*>/)?.[1]
+          || body.match(/(?:private|protected|public)\s+(?:final\s+)?([A-Z][\w$]*)\s+[\w$]+\s*$/m)?.[1]
+          || match[2]?.match(/targetEntity\s*=\s*([A-Za-z_$][\w$]*)\.class/)?.[1];
+        if (!target) continue;
+        const options = match[2] || "";
+        addRelation({
+          from_entity: owner, to_entity: target, framework: "jpa",
+          cardinality: ORM_JAVA_CARDINALITY[match[1].toLowerCase()],
+          cardinality_basis: `orm_annotation: @${match[1]}`,
+          from_columns: [body.match(/@JoinColumn\s*\([^)]*name\s*=\s*["']([^"']+)["']/i)?.[1]].filter(Boolean),
+          owning_side: !/\bmappedBy\s*=/.test(options),
+          file: rel, line: atLine(match.index), evidence: `@${match[1]}${options.replace(/\s+/g, " ").slice(0, 80)}`,
+        });
+      }
+    }
+  }
+
+  if (ext === ".py") {
+    const classes = [...clean.matchAll(/^class\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:/gm)];
+    for (const [index, match] of classes.entries()) {
+      const body = clean.slice(match.index, classes[index + 1]?.index ?? clean.length);
+      const isDjango = /\bmodels\.Model\b|\bModel\b/.test(match[2]);
+      const isAlchemy = /\bBase\b|\bDeclarativeBase\b/.test(match[2]) || /__tablename__/.test(body);
+      if (!isDjango && !isAlchemy) continue;
+      const table = body.match(/__tablename__\s*=\s*["']([^"']+)["']/)?.[1]
+        || body.match(/db_table\s*=\s*["']([^"']+)["']/)?.[1];
+      const framework = isAlchemy ? "sqlalchemy" : "django";
+      entities.push({
+        name: match[1], table: table || match[1], table_resolved: Boolean(table), framework,
+        file: rel, line: atLine(match.index), origin: "deterministic-indexer", confidence: table ? "HIGH" : "MEDIUM",
+      });
+      // SQLAlchemy: ForeignKey는 방향과 다중성이 확정되고, secondary/uselist=False는 명시적이다.
+      for (const fk of body.matchAll(/(\w+)\s*=\s*(?:mapped_column|Column)\s*\(([\s\S]{0,300}?)\)\s*(?:\r?\n|$)/g)) {
+        const reference = fk[2].match(/ForeignKey\s*\(\s*["']([\w.]+)\.(\w+)["']/);
+        if (!reference) continue;
+        addRelation({
+          from_entity: match[1], to_entity: reference[1], to_entity_is_table: true, framework: "sqlalchemy",
+          cardinality: /\bunique\s*=\s*True\b/.test(fk[2]) ? "one_to_one" : "many_to_one",
+          cardinality_basis: `orm_annotation: ForeignKey(${/\bunique\s*=\s*True\b/.test(fk[2]) ? "unique=True" : "non-unique"})`,
+          from_columns: [fk[1]], to_columns: [reference[2]], owning_side: true,
+          file: rel, line: atLine(match.index + fk.index), evidence: `ForeignKey("${reference[1]}.${reference[2]}")`,
+        });
+      }
+      for (const rel2 of body.matchAll(/(\w+)\s*=\s*relationship\s*\(\s*["']?([A-Za-z_]\w*)["']?([\s\S]{0,300}?)\)\s*(?:\r?\n|$)/g)) {
+        const options = rel2[3] || "";
+        const cardinality = /\bsecondary\s*=/.test(options) ? "many_to_many"
+          : /\buselist\s*=\s*False\b/.test(options) ? "one_to_one" : "unknown";
+        addRelation({
+          from_entity: match[1], to_entity: rel2[2], framework: "sqlalchemy", cardinality,
+          cardinality_basis: cardinality === "unknown"
+            ? "orm_relationship_direction_unresolved: relationship()만으로는 다중성을 확정할 수 없음(ForeignKey 쪽 근거 확인 필요)"
+            : `orm_annotation: relationship(${/\bsecondary\s*=/.test(options) ? "secondary" : "uselist=False"})`,
+          confidence: cardinality === "unknown" ? "LOW" : "HIGH",
+          file: rel, line: atLine(match.index + rel2.index), evidence: `relationship("${rel2[2]}")`,
+        });
+      }
+      // Django: 필드 타입이 카디널리티를 그대로 표현한다.
+      for (const field of body.matchAll(/(\w+)\s*=\s*models\.(ForeignKey|OneToOneField|ManyToManyField)\s*\(\s*["']?([A-Za-z_][\w.]*)["']?/g)) {
+        addRelation({
+          from_entity: match[1], to_entity: field[3].split(".").at(-1), framework: "django",
+          cardinality: field[2] === "OneToOneField" ? "one_to_one" : field[2] === "ManyToManyField" ? "many_to_many" : "many_to_one",
+          cardinality_basis: `orm_annotation: models.${field[2]}`,
+          from_columns: field[2] === "ForeignKey" ? [`${field[1]}_id`] : [field[1]], owning_side: true,
+          file: rel, line: atLine(match.index + field.index), evidence: `models.${field[2]}(${field[3]})`,
+        });
+      }
+    }
+  }
+
+  if (ext === ".ts" || ext === ".js" || ext === ".tsx") {
+    for (const match of clean.matchAll(/@Entity\s*\(([^)]*)\)\s*(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/g)) {
+      const table = match[1].match(/["']([^"']+)["']/)?.[1] || match[1].match(/name\s*:\s*["']([^"']+)["']/)?.[1];
+      entities.push({
+        name: match[2], table: table || match[2], table_resolved: Boolean(table), framework: "typeorm",
+        file: rel, line: atLine(match.index), origin: "deterministic-indexer", confidence: table ? "HIGH" : "MEDIUM",
+      });
+    }
+    const owner = entities[0]?.name;
+    if (owner) {
+      for (const match of clean.matchAll(/@(OneToOne|ManyToOne|OneToMany|ManyToMany)\s*\(\s*(?:\(\)\s*=>\s*|["'])([A-Za-z_$][\w$]*)/g)) {
+        addRelation({
+          from_entity: owner, to_entity: match[2], framework: "typeorm",
+          cardinality: ORM_JAVA_CARDINALITY[match[1].toLowerCase()],
+          cardinality_basis: `orm_annotation: @${match[1]}`, owning_side: true,
+          file: rel, line: atLine(match.index), evidence: `@${match[1]}(() => ${match[2]})`,
+        });
+      }
+    }
+    for (const match of clean.matchAll(/\b([A-Z][\w$]*)\s*\.\s*(hasOne|hasMany|belongsToMany|belongsTo)\s*\(\s*([A-Z][\w$]*)/g)) {
+      addRelation({
+        from_entity: match[1], to_entity: match[3], framework: "sequelize",
+        cardinality: ORM_SEQUELIZE_CARDINALITY[match[2].toLowerCase()],
+        cardinality_basis: `orm_association: ${match[2]}`, owning_side: match[2] !== "belongsTo",
+        file: rel, line: atLine(match.index), evidence: `${match[1]}.${match[2]}(${match[3]})`,
+      });
+    }
+  }
+
+  return { entities, ormRelations: relations };
 }
 
 function analyzeFile(file, root, config) {
@@ -870,6 +1104,7 @@ function analyzeFile(file, root, config) {
     communications: extractExternalIo(text, clean, file.rel, workspace, symbolFacts.methods),
     env: extractEnv(text, clean, file.rel, workspace),
     tables: ext === ".sql" ? extractSchema(text, file.rel) : [],
+    ...extractOrm(clean, file.rel, ext),
   };
 }
 
@@ -891,12 +1126,41 @@ function gitCommit(root) {
   }
 }
 
-function pairConfig(root) {
+// 백엔드 1개에 분리된 클라이언트가 여러 개(1:N) 붙을 수 있으므로 파트너를 목록으로 읽는다.
+// 단수 `partner_root:` 필드는 1:1 설정의 하위 호환이며 첫 파트너로 취급한다.
+export function pairConfig(root) {
   const path = join(root, "_workspace", "pair_config.md");
   if (!existsSync(path)) return null;
   const text = readFileSync(path, "utf8");
   const value = (name) => text.match(new RegExp(`^${name}:\\s*(.+)$`, "m"))?.[1]?.trim();
-  return { partner_root: value("partner_root"), partner_api_contract: value("partner_api_contract") };
+  const partners = [];
+  const add = (partner) => {
+    if (!partner.root || partners.some((item) => item.root === partner.root)) return;
+    partners.push({
+      id: partner.id || basename(partner.root), type: partner.type || "unknown", root: partner.root,
+      api_contract: partner.api_contract || join(partner.root, "_workspace", "index", "api_contracts.json"),
+      stack: partner.stack || "unknown",
+    });
+  };
+  add({ id: value("partner_id"), type: value("partner_type"), root: value("partner_root"), api_contract: value("partner_api_contract"), stack: value("partner_stack") });
+  // `## 파트너 목록` 표: | id | type | root | api_contract | stack |
+  // heading으로 split한다 — JS 정규식에는 \Z가 없어서 lookahead로 문서 끝을 표현할 수 없다.
+  const section = text.split(/^##\s+/m).find((part) => /^파트너 목록/.test(part.trim())) || "";
+  for (const line of section.split(/\r?\n/)) {
+    if (!line.trim().startsWith("|")) continue;
+    const cells = line.split("|").map((cell) => cell.trim());
+    cells.shift();
+    if (cells.at(-1) === "") cells.pop();
+    if (cells.length < 3 || /^-{2,}$/.test(cells[1] || "") || cells[0].toLowerCase() === "id") continue;
+    add({ id: cells[0], type: cells[1], root: cells[2], api_contract: cells[3], stack: cells[4] });
+  }
+  if (!partners.length) return null;
+  return {
+    partners,
+    partner_root: partners[0].root,
+    partner_api_contract: partners[0].api_contract,
+    system_wiki_root: value("system_wiki_root"),
+  };
 }
 
 function aggregate(facts, options, config, generatedAt, sourceFileCount, latestMtime, complexity, coverage) {
@@ -939,9 +1203,14 @@ function aggregate(facts, options, config, generatedAt, sourceFileCount, latestM
   let endpoints = unique(composeFastApiEndpoints(facts, facts.flatMap((item) => item.endpoints)), (item) => item.id);
   let consumers = unique(facts.flatMap((item) => item.consumers), (item) => item.id);
   const pair = pairConfig(options.root);
-  if (pair?.partner_api_contract && existsSync(pair.partner_api_contract)) {
-    const partner = readJson(pair.partner_api_contract, {});
-    const externalize = (item) => ({ ...item, source: "external", external_repo_path: pair.partner_root, origin: item.origin || "deterministic-indexer" });
+  // 1:N에서는 모든 파트너의 계약을 병합해야 클라이언트별 미매칭 호출이 누락되지 않는다.
+  for (const partnerConfig of pair?.partners || []) {
+    if (!existsSync(partnerConfig.api_contract)) continue;
+    const partner = readJson(partnerConfig.api_contract, {});
+    const externalize = (item) => ({
+      ...item, source: "external", external_repo_path: partnerConfig.root,
+      external_repo_id: partnerConfig.id, origin: item.origin || "deterministic-indexer",
+    });
     endpoints = unique([...endpoints, ...(partner.endpoints || []).filter((item) => item.source !== "external").map(externalize)], (item) => item.id);
     consumers = unique([...consumers, ...(partner.consumers || []).filter((item) => item.source !== "external").map(externalize)], (item) => item.id);
   }
@@ -971,7 +1240,33 @@ function aggregate(facts, options, config, generatedAt, sourceFileCount, latestM
     file: table.source_file, line: null, evidence: foreignKey.name || "DDL FOREIGN KEY",
     origin: foreignKey.origin || "deterministic-indexer", confidence: foreignKey.confidence || "HIGH",
   })));
-  const schemaRelations = unique([...foreignKeyRelations, ...sqlRelations], (item) => `${item.type}:${item.from_table}:${item.from_columns?.join(",")}:${item.to_table}:${item.to_columns?.join(",")}:${item.file}:${item.line}`);
+  const tableIndex = new Map(tables.map((table) => [tableKey(table.name), table]));
+  const entities = unique(facts.flatMap((item) => item.entities || []), (item) => `${item.name}:${item.file}`);
+  // 엔티티 이름은 프레임워크가 다르면 우연히 겹칠 수 있으므로 같은 프레임워크를 우선 해석한다.
+  const resolveEntity = (name, framework) => {
+    if (!name) return null;
+    const key = String(name).toLowerCase();
+    const candidates = entities.filter((item) => item.name.toLowerCase() === key);
+    return candidates.find((item) => item.framework === framework) || candidates[0] || null;
+  };
+  const ormRelations = facts.flatMap((item) => item.ormRelations || []).map((relation) => {
+    const from = resolveEntity(relation.from_entity, relation.framework);
+    // SQLAlchemy ForeignKey는 대상이 이미 물리 테이블명이라 엔티티 해석을 건너뛴다.
+    const to = relation.to_entity_is_table ? null : resolveEntity(relation.to_entity, relation.framework);
+    return {
+      type: "orm_relation",
+      from_table: from?.table || relation.from_entity, to_table: to?.table || relation.to_entity,
+      from_columns: relation.from_columns || [], to_columns: relation.to_columns || [],
+      from_entity: relation.from_entity, to_entity: relation.to_entity,
+      cardinality: relation.cardinality, cardinality_basis: relation.cardinality_basis,
+      framework: relation.framework, owning_side: relation.owning_side !== false,
+      file: relation.file, line: relation.line, evidence: relation.evidence,
+      origin: relation.origin, confidence: relation.confidence,
+    };
+  });
+  const schemaRelations = unique([...foreignKeyRelations, ...sqlRelations, ...ormRelations], (item) => `${item.type}:${item.from_table}:${item.from_columns?.join(",")}:${item.to_table}:${item.to_columns?.join(",")}:${item.file}:${item.line}`)
+    .map((relation) => cardinalityOf(relation, tableIndex));
+  const derivedRelations = unique(deriveManyToMany(tables), (item) => `${item.via_table}:${item.from_table}:${item.to_table}`);
   const inDegree = new Map(nodes.map((item) => [item.id, 0]));
   for (const edge of edges) inDegree.set(edge.to, (inDegree.get(edge.to) || 0) + 1);
   const unusedMethods = options.tier === "Full"
@@ -1004,7 +1299,14 @@ function aggregate(facts, options, config, generatedAt, sourceFileCount, latestM
   if (boundaries.length) output.transactions = { _meta: common, boundaries };
   if (communications.length) output.external_io = { _meta: common, communications };
   if (branches.length) output.env_branches = { _meta: common, profiles, branches };
-  if (tables.length || schemaRelations.length) output.schema = { _meta: { ...common, relation_count: schemaRelations.length }, tables, relations: schemaRelations, views: [], procedures: [], functions: [], triggers: [] };
+  if (tables.length || schemaRelations.length || entities.length) output.schema = {
+    _meta: {
+      ...common, relation_count: schemaRelations.length,
+      derived_relation_count: derivedRelations.length, entity_count: entities.length,
+    },
+    tables, entities, relations: schemaRelations, derived_relations: derivedRelations,
+    views: [], procedures: [], functions: [], triggers: [],
+  };
   const pairLinked = existsSync(join(options.root, "_workspace", "pair_config.md"));
   if (config.workspace_mode || pairLinked) output.api_contracts = {
     _meta: common, endpoints, consumers, matches,

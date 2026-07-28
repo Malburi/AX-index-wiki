@@ -100,8 +100,28 @@ pair:  B-I→B-A→B-V ─┐
 6. (pair) 두 프로젝트에 1~5 반복 → 양쪽 `_workspace/pair_config.md` 기록 → `refresh-pair-index.mjs --backend --consumer` PASS → `build-wiki.mjs --backend <be> --frontend <fe>` → backend에만 위키 생성 + `api-contracts.html` 존재 + `08_system_wiki_report.md`의 `API 계약 PASS` 확인
 7. (전체 흐름) 플러그인 설치 후 별도 세션에서 `index-init` 실행 — analyzer 1회 호출로 `01_analyzer_report.md` 생성 → validator `--index-only` PASS → `build-wiki` standard 모드에서 wiki-builder 1회로 `wiki-narrative.json` 생성 → 재렌더링 시 `서술 보강 PASS` 확인
 
-## 7. 추출 원본 버전
+## 7. 추출 원본 버전과 이후 확장
 
 - 원본: `Malburi/AX-Harness-wiki` — 로컬 v0.6.1 (commit `90e7a34` 시점, 2026-07-23 추출)
 - 원본 변경 이력의 관련 항목: v0.5.0(토큰 강제·MJS 위키), v0.5.9(DB 관계·그래프), v0.6.0(초기화 구성 분류), v0.6.1(validator 계약 수리)
-- 원본이 인덱서·위키 렌더러를 개선하면 이 패키지의 verbatim 파일들(1-1 표)을 다시 복사하고 `npm test`와 6장 스모크만 재실행하면 된다. 수정 파일(1-2 표)은 diff를 보고 수동 병합한다.
+
+### 추출 후 이 패키지에서 추가한 기능 (원본에 없음)
+
+인덱서 `1.6.0 → 1.7.0`. 아래는 원본에서 그대로 가져온 것이 아니라 이 패키지에서 새로 만든 부분이므로, 원본을 다시 verbatim 복사하면 **덮어써진다**. 재복사 시 반드시 diff로 병합해야 한다.
+
+| 기능 | 변경 파일 | 요약 |
+|---|---|---|
+| 관계 다중성(1:1·1:N·N:1·N:M) | `build-index.mjs`, `schema.schema.json`, `build-wiki.mjs`, `index-spec.md` | 테이블 레벨 `UNIQUE` 제약·컬럼 레벨 `UNIQUE` 추출을 추가하고, FK·JOIN 관계에 `cardinality`+`cardinality_basis`를 결정적으로 부여. 조인 테이블에서 N:M을 `derived_relations[]`로 파생 |
+| 명명된 PK 제약 인식 | `build-index.mjs` | `CONSTRAINT pk_x PRIMARY KEY (...)`를 놓치던 원본 정규식 수정 (원본에도 있던 결함이며 1:1 판정의 전제) |
+| ORM 관계 추출 | `build-index.mjs`, `schema.schema.json` | JPA·SQLAlchemy·Django·TypeORM·Sequelize의 매핑에서 명시적 카디널리티와 `entities[]` 엔티티→테이블 매핑을 추출. DDL 없는 프로젝트도 `schema.json` 생성 |
+| 저장소 1:N 토폴로지 | `build-index.mjs`(`pairConfig`), `refresh-pair-index.mjs`, `build-wiki.mjs`, `pair-init`·`index-init`·`build-wiki` SKILL | 백엔드 1개에 분리 클라이언트 N개. `pair_config.md`의 `## 파트너 목록` 표, `--frontend` 반복 인자, 클라이언트별 drift 보고 + backend `api_drift_summary.md`. 단수 `partner_*` 필드 1:1 설정은 하위 호환 유지 |
+
+`pairConfig`는 `build-index.mjs`에서 **export**로 바뀌었다(원본은 모듈 내부 함수). `refresh-pair-index.mjs`가 파트너 목록을 읽기 위해 사용한다.
+
+`refreshPair()`의 시그니처는 `{ backend, consumers: [...] }`를 받도록 확장했고 기존 `{ backend, consumer }` 호출도 계속 동작한다. 반환값에 `topology`·`clients[]`가 추가됐으며 `endpoints`·`matched`·`consumer` 등 1:1 시절 필드는 하위 호환으로 남아 있다.
+
+### 원본 재동기화 절차
+
+1. 1-1 표의 verbatim 파일 중 **`build-index.mjs`·`build-wiki.mjs`·`refresh-pair-index.mjs`는 그대로 덮어쓰지 않는다** — 위 표의 확장이 들어 있다. `git diff`로 원본 변경분만 골라 병합한다.
+2. 나머지 verbatim 파일(스키마 11종 중 `schema.schema.json` 제외, docs, `query-index.mjs`, `ai-budget.mjs`)은 재복사 가능하다.
+3. 병합 후 `npm test` 15건과 6장 스모크를 재실행한다.

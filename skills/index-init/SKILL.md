@@ -39,7 +39,8 @@ description: 프로젝트 전체를 결정적 인덱서로 전수 색인하고, 
 2. 현재 폴더 안의 서버·클라이언트를 함께 초기화
    - 한 상위 폴더 안의 backend와 frontend/desktop/mobile을 워크스페이스로 통합 분석합니다.
 3. 서로 다른 폴더의 서버·클라이언트를 각각 초기화 후 연결
-   - 두 프로젝트를 독립적으로 초기화하고 양쪽 검증 후 pair-init으로 연결합니다.
+   - 각 프로젝트를 독립적으로 초기화하고 전체 검증 후 pair-init으로 연결합니다.
+   - 클라이언트가 여러 개(웹+모바일 등)여도 한 번에 처리합니다.
 4. 현재 폴더의 특정 폴더·모듈만 초기화
    - 선택한 상대경로만 분석합니다.
 ```
@@ -50,7 +51,7 @@ description: 프로젝트 전체를 결정적 인덱서로 전수 색인하고, 
 |---|---|---|---|
 | 현재 폴더를 하나의 프로젝트로 초기화 | `single-root` | 없음 | 현재 root의 단일 Lane |
 | 현재 폴더 안의 서버·클라이언트를 함께 초기화 | `monorepo` | root 내부 workspace 상대경로와 역할 | 한 root, `workspace_mode: true` |
-| 서로 다른 폴더의 서버·클라이언트를 각각 초기화 후 연결 | `paired-roots` | 양쪽 절대경로·역할·Read/Write 권한 | 두 독립 Lane → validator barrier → pair-init |
+| 서로 다른 폴더의 서버·클라이언트를 각각 초기화 후 연결 | `paired-roots` | 각 저장소 절대경로·역할·Read/Write 권한 (클라이언트 N개 허용) | 저장소당 독립 Lane → validator barrier → pair-init |
 | 현재 폴더의 특정 폴더·모듈만 초기화 | `selected-paths` | root 내부 상대경로 | 현재 root의 제한된 단일 Lane |
 
 선택 후에는 필요한 경로만 후속 확인한다. 휴리스틱으로 발견한 `server`, `backend`, `client`, `frontend`, `web`, `mobile` 후보는 경로 확인 표의 제안값으로만 사용하며 사용자의 구성 선택을 자동으로 바꾸지 않는다. 사용자가 요청문에 구성과 경로를 이미 명시했다면 질문을 생략하고 `source: explicit-request`로 기록한다. 기존 scope에 `init_layout`이 없으면 구형 설정을 임의 변환하지 않고 이 구성 질문을 한 번 수행해 마이그레이션한다.
@@ -133,7 +134,7 @@ initial/reinitialize에서 기존 산출물이 있으면 먼저 백업한다.
 
 ### Step 2.6: 분리 저장소 단일 명령·양쪽 초기화 준비
 
-`paired-roots`를 선택한 경우 backend(server) root와 client(frontend/desktop/mobile) root의 절대경로, 각 역할, 양쪽 Read/Write 권한을 확인한다. 현재 작업 폴더가 반드시 한쪽 root라는 가정은 하지 않는다. 경로와 기존 인덱스 상태를 표로 보여주고 한 번 승인받는다.
+`paired-roots`를 선택한 경우 backend(server) root와 **모든** client(frontend/desktop/mobile) root의 절대경로, 각 역할, 전체 Read/Write 권한을 확인한다. 클라이언트 개수는 1개로 가정하지 않으며 "다른 클라이언트도 있습니까?"를 한 번 확인해 웹+모바일처럼 여러 개인 경우(1:N)를 함께 받는다. 현재 작업 폴더가 반드시 한쪽 root라는 가정은 하지 않는다. 경로와 기존 인덱스 상태를 표로 보여주고 한 번 승인받는다.
 
 승인 후 메모리에만 다음 객체를 보존한다. 이 단계에서 `pair-init`을 호출하지 않는다.
 
@@ -141,15 +142,17 @@ initial/reinitialize에서 기존 산출물이 있으면 먼저 백업한다.
 {
   "paired_init": true,
   "initiator_root": "...",
+  "topology": "one-to-one | one-to-many",
   "projects": [
     {"id":"backend","root":"...","role":"backend"},
-    {"id":"frontend","root":"...","role":"frontend"}
+    {"id":"frontend","root":"...","role":"frontend"},
+    {"id":"mobile","root":"...","role":"mobile"}
   ],
   "pair_state": "PENDING"
 }
 ```
 
-각 root는 자체 `_workspace/`를 가진다. `index-init`을 파트너 서브에이전트에서 재귀 호출하지 않는다.
+백엔드는 1개만 허용한다. 서로 다른 백엔드가 2개 이상이면 각각 별도 초기화 대상이며 하나의 pair로 묶지 않는다. 각 root는 자체 `_workspace/`를 가진다. `index-init`을 파트너 서브에이전트에서 재귀 호출하지 않는다.
 
 신규 초기화의 프로젝트·workspace ID는 역할을 그대로 사용한다. 단일 프로젝트는 `root`, 서버는 `backend`, 웹 클라이언트는 `frontend`, 데스크톱은 `desktop`, 모바일은 `mobile`이다. `consumer`는 API 계약 스키마의 `consumers[]` 같은 내부 용어에만 허용하고, 신규 `target_roots`·`workspaces[].id`·작업 제목·사용자 보고에는 ID나 역할명으로 쓰지 않는다.
 
@@ -185,10 +188,12 @@ T-I · MJS · 소스 구조와 호출 관계 인덱싱
 
 ### 분리 저장소
 
+클라이언트가 N개면 `C-*` Lane을 클라이언트마다 하나씩 만든다(`C1-*`, `C2-*` …). barrier는 backend와 모든 클라이언트 Lane을 기다린다.
+
 ```text
-B-I -> B-A -> B-V --\
-                     P-BARRIER -> P-PAIR -> P-REFRESH -> WIKI-ASK
-C-I -> C-A -> C-V --/
+B-I  -> B-A  -> B-V  --\
+C1-I -> C1-A -> C1-V ---+-> P-BARRIER -> P-PAIR -> P-REFRESH -> WIKI-ASK
+C2-I -> C2-A -> C2-V --/
 ```
 
 | ID | 사용자에게 표시할 제목 |
@@ -199,15 +204,17 @@ C-I -> C-A -> C-V --/
 | C-I | `C-I · MJS · [프론트엔드/데스크톱/모바일] 화면과 API 호출 구조 인덱싱` |
 | C-A | `C-A · analyzer · [프론트엔드/데스크톱/모바일] 화면에서 API까지 호출 흐름 분석` |
 | C-V | `C-V · MJS validator · [프론트엔드/데스크톱/모바일] 분석 결과 검증` |
-| P-BARRIER | `P-BARRIER · 양쪽 저장소 검증 결과 확인` |
-| P-PAIR | `P-PAIR · 프론트엔드와 백엔드 양방향 연결` |
-| P-REFRESH | `P-REFRESH · API 계약과 미매칭 호출 갱신` |
+| P-BARRIER | `P-BARRIER · 모든 저장소 검증 결과 확인` |
+| P-PAIR | `P-PAIR · 클라이언트와 백엔드 양방향 연결` |
+| P-REFRESH | `P-REFRESH · 클라이언트별 API 계약과 미매칭 호출 갱신` |
 | WIKI-ASK | `WIKI-ASK · 초기화 결과 확인 후 위키 생성 여부 질문` |
 
-- 같은 단계의 두 Lane은 병렬 실행할 수 있다.
+클라이언트가 여러 개면 `C-*` 제목에 실제 역할을 넣어 구분한다 — `C1-I · MJS · [프론트엔드] …`, `C2-I · MJS · [모바일] …`.
+
+- 같은 단계의 Lane들은 병렬 실행할 수 있다.
 - 각 Lane 내부 `I -> A -> V` 순서는 유지한다.
-- `P-BARRIER`: 양쪽 결정적 validator PASS/WARN 확인
-- 한 Lane이 실패하면 성공 Lane은 보존하고 `pair_state: PENDING`으로 둔다.
+- `P-BARRIER`: backend와 **모든** 클라이언트의 결정적 validator PASS/WARN 확인
+- 한 Lane이 실패하면 성공 Lane은 보존하고 `pair_state: PENDING`으로 둔다. 실패한 클라이언트만 연결에서 제외하고 나머지를 연결하지 않는다 — 부분 연결은 계약 매칭을 왜곡한다.
 - 실패 Lane만 재개하며 성공 Lane을 다시 분석하지 않는다.
 
 `TaskCreate`가 있으면 위의 내부 ID와 한글 설명을 **함께 포함한 제목 그대로** 작업을 생성한다. 호스트가 전문 agent 이름 대신 `general-purpose`만 표시하면 `T-A · general-purpose/analyzer · 업무 흐름과 레거시 로직 분석`처럼 실제 agent 이름과 한글 목적을 description에 함께 넣는다. `_workspace/00_pipeline_status.md` 체크리스트로 폴백할 때도 같은 제목을 사용한다.
@@ -341,28 +348,30 @@ target당 보완 호출은 최대 1회다. gate가 거부하거나 재검증도 
 
 `paired_init: true`에서만 실행한다.
 
-1. 양쪽 `_workspace/03_validator_result.json`이 FAIL이 아닌지 확인한다.
-2. 한쪽 실패 시 성공 Lane은 보존하고 `pair_state: PENDING`; 연결하지 않는다.
-3. 양쪽 통과 후에만 pair 설정을 원자적으로 기록한다.
+1. backend와 모든 클라이언트의 `_workspace/03_validator_result.json`이 FAIL이 아닌지 확인한다.
+2. 하나라도 실패 시 성공 Lane은 보존하고 `pair_state: PENDING`; 연결하지 않는다.
+3. 전체 통과 후에만 pair 설정을 원자적으로 기록한다.
 
 ```text
 Skill("pair-init",
   input="post_dual_init: true
   backend_root: [...]
-  consumer_root: [...]
+  client_roots: [클라이언트 절대경로 목록]
   skip_questions: true
   deterministic_refresh: true")
 ```
 
-4. `pair-init`이 양방향 `pair_config.md`를 기록한 뒤 내부에서 다음 스크립트를 한 번 실행해 backend -> consumer -> backend 순서의 incremental 인덱스를 재사용한다.
+4. `pair-init`이 양방향 `pair_config.md`를 기록한 뒤(1:N이면 backend 쪽에 `## 파트너 목록` 표) 내부에서 다음 스크립트를 한 번 실행해 backend -> 각 client -> backend 순서의 incremental 인덱스를 재사용한다.
 
 ```bash
 node "[plugin-root]/scripts/refresh-pair-index.mjs" \
   --backend "[backend-root]" \
-  --consumer "[consumer-root]"
+  --frontend "[client-root]"        # 클라이언트마다 --frontend 반복
 ```
 
-이 명령은 실패 복구용 직접 재실행 형식이기도 하다. API endpoint/consumer/match와 `_workspace/api_drift_report.md`를 생성한다. 오케스트레이터가 `pair-init` 완료 후 같은 명령을 중복 실행하면 안 된다.
+이 명령은 실패 복구용 직접 재실행 형식이기도 하다. API endpoint/consumer/match와 클라이언트별 `_workspace/api_drift_report.md`, backend `_workspace/api_drift_summary.md`를 생성한다. 오케스트레이터가 `pair-init` 완료 후 같은 명령을 중복 실행하면 안 된다.
+
+5. 위키는 backend 정본 한 곳에만 만든다. 1:N이면 `build-wiki`에 `--frontend`를 클라이언트마다 반복해 전달한다.
 
 ### 2-6. 위키 결정
 

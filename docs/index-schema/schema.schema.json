@@ -23,14 +23,34 @@
                 "type": { "type": "string" },
                 "nullable": { "type": "boolean" },
                 "default": {},
-                "primary_key": { "type": "boolean" }
+                "primary_key": { "type": "boolean" },
+                "unique": { "type": "boolean" }
               }
             }
           },
           "primary_key": { "type": "array", "items": { "type": "string" } },
           "foreign_keys": { "type": "array" },
+          "unique_constraints": { "type": "array" },
           "indexes": { "type": "array" },
+          "join_table": { "type": "boolean" },
           "row_count_estimate": { "type": ["integer", "null"] }
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "file", "line"],
+        "properties": {
+          "name": { "type": "string" },
+          "table": { "type": "string" },
+          "table_resolved": { "type": "boolean" },
+          "framework": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "origin": { "type": "string" },
+          "confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] }
         }
       }
     },
@@ -40,13 +60,42 @@
         "type": "object",
         "required": ["type", "from_table", "from_columns", "to_table", "to_columns", "confidence"],
         "properties": {
-          "type": { "type": "string", "enum": ["foreign_key", "query_join"] },
+          "type": { "type": "string", "enum": ["foreign_key", "query_join", "orm_relation"] },
           "name": { "type": "string" },
           "from_table": { "type": "string" },
           "from_columns": { "type": "array", "items": { "type": "string" } },
           "to_table": { "type": "string" },
           "to_columns": { "type": "array", "items": { "type": "string" } },
+          "cardinality": { "type": "string", "enum": ["one_to_one", "one_to_many", "many_to_one", "many_to_many", "unknown"] },
+          "cardinality_basis": { "type": "string" },
+          "from_entity": { "type": "string" },
+          "to_entity": { "type": "string" },
+          "framework": { "type": "string" },
+          "owning_side": { "type": "boolean" },
           "sql_id": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"] },
+          "evidence": { "type": "string" },
+          "origin": { "type": "string" },
+          "confidence": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] }
+        }
+      }
+    },
+    "derived_relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "cardinality", "from_table", "to_table", "via_table", "confidence"],
+        "properties": {
+          "type": { "type": "string", "enum": ["many_to_many"] },
+          "cardinality": { "type": "string", "enum": ["many_to_many"] },
+          "from_table": { "type": "string" },
+          "from_columns": { "type": "array", "items": { "type": "string" } },
+          "to_table": { "type": "string" },
+          "to_columns": { "type": "array", "items": { "type": "string" } },
+          "via_table": { "type": "string" },
+          "via_columns": { "type": "array", "items": { "type": "string" } },
+          "cardinality_basis": { "type": "string" },
           "file": { "type": "string" },
           "line": { "type": ["integer", "null"] },
           "evidence": { "type": "string" },

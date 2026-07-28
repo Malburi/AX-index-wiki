@@ -13,10 +13,10 @@
 | 스킬 | `pair-init` | 분리 저장소(backend/client) 양방향 연결 + API 계약·드리프트 결정적 검증 |
 | 에이전트 | `analyzer` | 결정적 인덱스 기반 의미·위험·패턴 판정, unresolved AI edge patch |
 | 에이전트 | `wiki-builder` | 선택적 서술 보강 전용 — 작은 `wiki-narrative.json`만 생성 |
-| 스크립트 | `scripts/build-index.mjs` | 무의존성 결정적 인덱서 (`_meta`·symbols·call_graph·SQL·API·transaction·external·env·schema·dead-code) |
+| 스크립트 | `scripts/build-index.mjs` | 무의존성 결정적 인덱서 (`_meta`·symbols·call_graph·SQL·API·transaction·external·env·schema·dead-code). DB 관계는 **1:1·1:N·N:1·N:M 다중성까지** 근거와 함께 판정 |
 | 스크립트 | `scripts/query-index.mjs` | 대형 JSON을 직접 읽지 않도록 bounded 조회 (summary/unresolved/search) |
 | 스크립트 | `scripts/validate-harness.mjs` | 인덱스 스키마·그래프 무결성·file:line 근거 검증. **`--index-only`** 모드 지원 |
-| 스크립트 | `scripts/refresh-pair-index.mjs` | backend→consumer→backend 증분 refresh + API drift 보고 |
+| 스크립트 | `scripts/refresh-pair-index.mjs` | backend→각 client→backend 증분 refresh + 클라이언트별 API drift 보고 (백엔드 1개 : 클라이언트 N개 지원) |
 | 스크립트 | `scripts/build-wiki.mjs` | 단일/pair 위키·검색·호출 그래프를 AI 0회 렌더링 |
 | 스크립트 | `scripts/ai-budget.mjs` | session별 AI 호출 예산(initial 1 + retry 1) 강제 |
 
@@ -45,8 +45,30 @@ node scripts/build-index.mjs --root <project> --mode init --tier Auto
 node scripts/query-index.mjs summary --root <project>
 node scripts/validate-harness.mjs --root <project> --index-only
 node scripts/build-wiki.mjs --root <project>                          # 단일
-node scripts/build-wiki.mjs --backend <be> --frontend <fe>            # pair (backend에 단일 정본 위키)
+node scripts/build-wiki.mjs --backend <be> --frontend <fe>            # pair 1:1 (backend에 단일 정본 위키)
+node scripts/build-wiki.mjs --backend <be> --frontend <web> --frontend <mobile>   # pair 1:N
 ```
+
+## DB 관계와 다중성
+
+관계는 근거 종류를 섞지 않고 세 갈래로 추출하며, **다중성은 근거가 있을 때만** 확정한다 — 없으면 추정하지 않고 `다중성 미확정`으로 남긴다.
+
+| 근거 | 다중성 판정 |
+|---|---|
+| **DDL FK** (`CREATE TABLE ... FOREIGN KEY`) | 자식 쪽 FK 컬럼이 PK·`UNIQUE` 제약·`UNIQUE INDEX`로 덮이면 **1:1**, 아니면 **N:1** |
+| **ORM 매핑** (JPA·SQLAlchemy·Django·TypeORM·Sequelize) | 애노테이션이 다중성을 직접 표현 — `@OneToOne`→1:1, `@OneToMany`→1:N, `@ManyToOne`→N:1, `@ManyToMany`→N:M. DDL이 없는 프로젝트도 관계 확보 |
+| **SQL JOIN 추론** (`alias.col = alias.col`) | 양쪽 컬럼의 유일성 조합으로 판정. 한쪽 테이블 DDL이 없으면 미확정 |
+
+**N:M**은 조인 테이블(FK 2개 이상의 컬럼 합집합이 유일한 테이블)에서 파생해 별도로 기록하며, 물리 FK 선언 자체는 각각 N:1로 그대로 남긴다. 위키 데이터 모델 페이지가 다중성 배지·판정 근거·N:M 섹션·관계 종류별 필터를 함께 렌더링한다.
+
+## 저장소 토폴로지
+
+- **단일** — `--root`
+- **모노레포** — 한 root 안 여러 workspace (`workspace_mode`)
+- **분리 1:1** — backend + client 1개
+- **분리 1:N** — backend 1개 + 분리된 client N개(웹+모바일 등). backend `pair_config.md`의 `## 파트너 목록` 표로 선언하고, 클라이언트별로 API drift를 분리 보고한다. 한 클라이언트만 미매칭이어도 종합 상태는 WARN이며 위키는 backend 한 곳에만 생성된다.
+
+백엔드가 2개 이상인 구성은 하나의 pair로 묶지 않는다 — 각각 별도 초기화 대상이다.
 
 ## 원본과의 차이
 
@@ -61,7 +83,7 @@ AX-Harness 전체 파이프라인에서 **인덱스 생성과 위키 생성만**
 ## 검증
 
 ```bash
-npm test   # build-index 7건 + validate-harness index-only 3건
+npm test   # 15건 — build-index 7, validate-harness index-only 3, 관계·다중성·1:N 5
 ```
 
 ## 출처

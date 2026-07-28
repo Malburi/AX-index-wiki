@@ -35,18 +35,20 @@ const VISUAL = {
 };
 
 function parseArgs(argv) {
-  const args = { root: null, backend: null, frontend: null, quiet: false };
+  // --frontend는 반복 가능하다. 백엔드 1개 : 클라이언트 N개(1:N) 시스템 위키를 한 번에 만든다.
+  const args = { root: null, backend: null, frontends: [], quiet: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--root") args.root = argv[++i];
     else if (argv[i] === "--backend") args.backend = argv[++i];
-    else if (["--frontend", "--client", "--consumer"].includes(argv[i])) args.frontend = argv[++i];
+    else if (["--frontend", "--client", "--consumer"].includes(argv[i])) args.frontends.push(argv[++i]);
     else if (argv[i] === "--quiet") args.quiet = true;
     else if (argv[i] === "--help" || argv[i] === "-h") args.help = true;
     else throw new Error(`알 수 없는 인자: ${argv[i]}`);
   }
-  if (!args.help && !args.root && !(args.backend && args.frontend)) throw new Error("단일 프로젝트는 --root, pair는 --backend와 --frontend가 필요합니다.");
-  if (args.root && (args.backend || args.frontend)) throw new Error("--root와 pair 인자를 함께 사용할 수 없습니다.");
-  for (const key of ["root", "backend", "frontend"]) if (args[key]) args[key] = resolve(args[key]);
+  if (!args.help && !args.root && !(args.backend && args.frontends.length)) throw new Error("단일 프로젝트는 --root, pair는 --backend와 1개 이상의 --frontend가 필요합니다.");
+  if (args.root && (args.backend || args.frontends.length)) throw new Error("--root와 pair 인자를 함께 사용할 수 없습니다.");
+  for (const key of ["root", "backend"]) if (args[key]) args[key] = resolve(args[key]);
+  args.frontends = args.frontends.map((item) => resolve(item));
   return args;
 }
 
@@ -613,10 +615,10 @@ function architectureNarrativeHtml(narrative, projects, system) {
 function siteIdentity(projects, system) {
   const projectItems = projects.map((project) => ({ project, ...projectIdentity(project) }));
   const backend = projectItems.find((item) => item.role === "backend") || projectItems[0];
-  const client = projectItems.find((item) => item.role === "client");
+  const clients = projectItems.filter((item) => item.role === "client");
   const title = system ? `${backend.title} · 통합 시스템 위키` : backend.title;
-  const summary = system && client
-    ? `${client.title} → API 계약 → ${backend.title}를 하나의 지식 베이스로 탐색합니다.`
+  const summary = system && clients.length
+    ? `${clients.map((item) => item.title).join(", ")} → API 계약 → ${backend.title}를 하나의 지식 베이스로 탐색합니다.${clients.length > 1 ? ` 클라이언트 ${clients.length}개가 같은 백엔드를 사용합니다.` : ""}`
     : backend.summary;
   return {
     title, summary, projectItems,
@@ -671,12 +673,43 @@ function dbRelations(project) {
   });
 }
 
+const CARDINALITY_LABEL = {
+  one_to_one: "1:1", one_to_many: "1:N", many_to_one: "N:1", many_to_many: "N:M", unknown: "다중성 미확정",
+};
+
+function cardinalityLabel(relation) {
+  return CARDINALITY_LABEL[relation?.cardinality] || CARDINALITY_LABEL.unknown;
+}
+
+// 관계는 근거 종류가 서로 다르므로 색·선 모양·신뢰도 배지를 분리한다.
+// DDL FK와 ORM 매핑은 선언된 근거이고 SQL JOIN은 쿼리에서 추론한 논리 관계다.
+function relationStyle(type) {
+  if (type === "query_join") return { label: "SQL JOIN 추론", color: "#f0b72f", dashes: true, badge: "medium" };
+  if (type === "orm_relation") return { label: "ORM 매핑", color: "#4493f8", dashes: [7, 4], badge: "high" };
+  return { label: "DDL FK", color: "#56c596", dashes: false, badge: "high" };
+}
+
+function derivedRelations(project) {
+  return asArray(project.indexes.schema.derived_relations).filter((item) => item?.from_table && item?.to_table && item?.via_table);
+}
+
 function buildGraph(projects) {
   const nodeMap = new Map(); const edges = []; const edgeKeys = new Set();
   const endpointMap = new Map(); const consumerMap = new Map();
   const endpointRecords = []; const consumerRecords = []; const deadRecords = new Map();
   const backendId = projects.find((project) => project.role === "backend")?.id;
-  const consumerId = projects.find((project) => project.role === "client")?.id;
+  // 1:N에서는 백엔드 인덱스에 여러 클라이언트의 external 항목이 섞이므로
+  // external_repo_path로 실제 소유 클라이언트를 찾아 귀속시킨다.
+  const clientProjects = projects.filter((project) => project.role === "client");
+  const clientByRoot = new Map(clientProjects.map((project) => [slash(project.root).toLowerCase(), project.id]));
+  const clientById = new Map(clientProjects.map((project) => [project.id, project.id]));
+  const ownerOf = (item, project) => {
+    if (item.source !== "external") return project.id;
+    return clientByRoot.get(slash(resolve(String(item.external_repo_path || ""))).toLowerCase())
+      || clientById.get(item.external_repo_id)
+      || clientProjects[0]?.id
+      || project.id;
+  };
   const addNode = (node) => {
     const current = nodeMap.get(node.id);
     nodeMap.set(node.id, current ? { ...current, ...Object.fromEntries(Object.entries(node).filter(([, value]) => value !== undefined && value !== "")) } : node);
@@ -715,7 +748,7 @@ function buildGraph(projects) {
       if (endpoint.source !== "external") endpointRecords.push({ ...endpoint, project: ownerId, nodeId: handler });
     }
     for (const consumer of asArray(project.indexes.api_contracts.consumers)) {
-      const ownerId = consumer.source === "external" && consumerId ? consumerId : project.id;
+      const ownerId = ownerOf(consumer, project);
       const id = ns(ownerId, `consumer:${consumer.id}`);
       addNode({ id, label: consumer.function || `${consumer.method || ""} ${consumer.path_literal || consumer.id}`, group: "view", project: ownerId, file: consumer.file, line: consumer.line, original_id: consumer.id, signature: `${consumer.method || ""} ${consumer.path_literal || consumer.path_pattern || ""}` });
       if (!consumerMap.has(consumer.id) || consumer.source !== "external") consumerMap.set(consumer.id, id);
@@ -757,12 +790,13 @@ function buildGraph(projects) {
       const from = ns(project.id, `table:${fromName}`); const to = ns(project.id, `table:${toName}`);
       addNode({ id: from, label: fromName, group: "db_table", project: project.id, original_id: fromName });
       addNode({ id: to, label: toName, group: "db_table", project: project.id, original_id: toName });
-      const inferred = relation.type === "query_join";
+      const style = relationStyle(relation.type);
       addEdge({
-        from, to, label: inferred ? "SQL JOIN (추론)" : "FK", type: "table_relation", relation_type: relation.type,
-        arrows: inferred ? undefined : "to", dashes: inferred, color: inferred ? "#f0b72f" : "#56c596",
+        from, to, label: `${style.label} ${cardinalityLabel(relation)}`, type: "table_relation", relation_type: relation.type,
+        arrows: relation.type === "query_join" ? undefined : "to", dashes: style.dashes, color: style.color,
         project: project.id, file: relation.file, line: relation.line, evidence: relation.evidence,
         from_columns: asArray(relation.from_columns), to_columns: asArray(relation.to_columns),
+        cardinality: relation.cardinality || "unknown", cardinality_basis: relation.cardinality_basis || "",
         confidence: relation.confidence, origin: relation.origin,
       });
     }
@@ -1010,9 +1044,13 @@ function dbRelationshipSection(projects) {
   const nodes = [];
   const edges = [];
   const rows = [];
+  const derivedRows = [];
   const connected = new Set();
   let foreignKeys = 0;
   let inferredJoins = 0;
+  let ormMappings = 0;
+  let manyToMany = 0;
+  let resolvedCardinality = 0;
 
   for (const project of projects) {
     const knownNames = new Map();
@@ -1046,31 +1084,52 @@ function dbRelationshipSection(projects) {
       connected.add(to);
       const inferred = relation.type === "query_join";
       if (inferred) inferredJoins += 1;
+      else if (relation.type === "orm_relation") ormMappings += 1;
       else foreignKeys += 1;
       const fromColumns = asArray(relation.from_columns);
       const toColumns = asArray(relation.to_columns);
-      const relationLabel = inferred ? "SQL JOIN 추론" : "DDL FK";
+      const style = relationStyle(relation.type);
+      const cardinality = cardinalityLabel(relation);
+      if (relation.cardinality && relation.cardinality !== "unknown") resolvedCardinality += 1;
       const location = [relation.file, relation.line].filter(Boolean).join(":");
       const evidence = relation.evidence || relation.name || relation.sql_id || "";
+      const defaultConfidence = relation.confidence || (inferred ? "MEDIUM" : "HIGH");
       edges.push({
-        id: `db-edge-${edges.length}`, from, to, label: relationLabel,
-        arrows: inferred ? undefined : "to", dashes: inferred,
-        color: inferred ? "#f0b72f" : "#56c596",
-        project: project.id, relation_type: relation.type,
+        id: `db-edge-${edges.length}`, from, to, label: `${style.label} ${cardinality}`,
+        arrows: inferred ? undefined : "to", dashes: style.dashes, color: style.color,
+        project: project.id, relation_type: relation.type, relation_label: style.label,
         from_table: fromName, to_table: toName,
         from_columns: fromColumns, to_columns: toColumns,
+        cardinality: relation.cardinality || "unknown", cardinality_label: cardinality,
+        cardinality_basis: relation.cardinality_basis || "", framework: relation.framework || "",
         file: relation.file, line: relation.line, evidence,
-        confidence: relation.confidence || (inferred ? "MEDIUM" : "HIGH"),
-        title: [relationLabel, `${fromName}.${fromColumns.join(",")} → ${toName}.${toColumns.join(",")}`, location, evidence].filter(Boolean).join("\n"),
+        confidence: defaultConfidence,
+        title: [`${style.label} · ${cardinality}`, `${fromName}.${fromColumns.join(",")} → ${toName}.${toColumns.join(",")}`, relation.cardinality_basis, location, evidence].filter(Boolean).join("\n"),
       });
       rows.push([
         escapeHtml(project.id),
-        `<span class="badge ${inferred ? "medium" : "high"}">${relationLabel}</span>`,
+        `<span class="badge ${style.badge}">${style.label}</span>`,
+        `<span class="badge ${relation.cardinality && relation.cardinality !== "unknown" ? "high" : "medium"}">${escapeHtml(cardinality)}</span>`,
         `<code>${escapeHtml(fromName)}${fromColumns.length ? "." + escapeHtml(fromColumns.join(",")) : ""}</code>`,
         `<code>${escapeHtml(toName)}${toColumns.length ? "." + escapeHtml(toColumns.join(",")) : ""}</code>`,
-        `<span class="badge ${String(relation.confidence || (inferred ? "MEDIUM" : "HIGH")).toLowerCase()}">${escapeHtml(relation.confidence || (inferred ? "MEDIUM" : "HIGH"))}</span>`,
+        escapeHtml(relation.cardinality_basis || "-"),
+        `<span class="badge ${String(defaultConfidence).toLowerCase()}">${escapeHtml(defaultConfidence)}</span>`,
         location ? `<code>${escapeHtml(location)}</code>` : "-",
         escapeHtml(evidence),
+      ]);
+    }
+
+    for (const relation of derivedRelations(project)) {
+      manyToMany += 1;
+      const location = [relation.file, relation.line].filter(Boolean).join(":");
+      derivedRows.push([
+        escapeHtml(project.id),
+        `<code>${escapeHtml(canonical(relation.from_table) || relation.from_table)}</code>`,
+        `<code>${escapeHtml(canonical(relation.to_table) || relation.to_table)}</code>`,
+        `<code>${escapeHtml(relation.via_table)}</code>`,
+        escapeHtml(asArray(relation.via_columns).join(", ") || "-"),
+        escapeHtml(relation.cardinality_basis || "-"),
+        location ? `<code>${escapeHtml(location)}</code>` : "-",
       ]);
     }
   }
@@ -1080,28 +1139,38 @@ function dbRelationshipSection(projects) {
   const stats = [
     [uniqueNodes.length, "관계도 테이블"],
     [foreignKeys, "DDL 외래키"],
+    [ormMappings, "ORM 매핑"],
     [inferredJoins, "SQL JOIN 추론"],
+    [manyToMany, "N:M (조인 테이블)"],
+    [`${resolvedCardinality}/${edges.length}`, "다중성 확정"],
     [isolated, "관계 미탐지"],
   ].map(([value, label]) => `<div class="stat-box"><span class="metric">${escapeHtml(value)}</span><div class="stat-label">${label}</div></div>`).join("");
   const empty = edges.length ? "" : '<div class="alert warn"><b>탐지된 테이블 관계가 없습니다.</b> DDL에 FOREIGN KEY가 없고 SQL JOIN도 정적으로 확인되지 않았습니다. 관계가 없다는 뜻이 아니라 동적 SQL·프로시저·애플리케이션 조합 조건을 추가 확인해야 합니다.</div>';
   const graph = { nodes: uniqueNodes, edges };
 
+  const derivedSection = derivedRows.length
+    ? `<h2>N:M 관계 (조인 테이블 경유)</h2>
+  <div class="alert"><b>판정 기준</b> — 외래키 2개 이상의 컬럼 합집합이 그 테이블에서 유일(PK 또는 UNIQUE)하면 양쪽 부모 테이블은 서로 N:M입니다. 아래 관계는 조인 테이블 DDL에서 파생한 것이며 물리 FK 선언 자체는 각각 N:1로 위 표에 있습니다.</div>
+  ${table(["프로젝트", "테이블 A", "테이블 B", "조인 테이블", "조인 컬럼", "판정 근거", "파일:라인"], derivedRows)}`
+    : "";
   return `<h2>테이블 관계도</h2>
-  <div class="alert warn"><b>관계 해석 기준</b><br>초록 실선 <b>DDL FK</b>는 스키마에 선언된 물리 외래키이고, 노랑 점선 <b>SQL JOIN 추론</b>은 실제 SQL의 컬럼 동등 조건에서 찾은 논리 관계입니다. SQL JOIN은 물리 FK 선언을 의미하지 않습니다.</div>
+  <div class="alert warn"><b>관계 해석 기준</b><br>초록 실선 <b>DDL FK</b>는 스키마에 선언된 물리 외래키, 파랑 파선 <b>ORM 매핑</b>은 소스의 매핑 애노테이션(@OneToMany·models.ForeignKey·relationship 등)에 선언된 관계, 노랑 점선 <b>SQL JOIN 추론</b>은 실제 SQL의 컬럼 동등 조건에서 찾은 논리 관계입니다. SQL JOIN은 물리 FK 선언을 의미하지 않습니다.<br><b>다중성(1:1·1:N·N:1·N:M)</b>은 from → to 방향 기준이며, FK는 자식 쪽 유일 제약(PK·UNIQUE·UNIQUE INDEX) 유무로, ORM은 애노테이션 종류로 판정합니다. 근거가 없으면 임의로 추정하지 않고 <b>다중성 미확정</b>으로 표시합니다.</div>
   <div class="stat-grid">${stats}</div>${empty}
   <div class="graph-layout" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,400px);gap:12px">
-    <section><div class="card toolbar"><button id="db-fit">전체 보기</button><button id="db-physics" class="active">물리엔진 ON</button><button id="db-fk" class="active">DDL FK</button><button id="db-join" class="active">SQL JOIN 추론</button></div><div id="db-network" style="height:68vh;margin-top:10px;background:#050c16;border:1px solid #263854;border-radius:12px"></div><div id="db-fallback" class="card" hidden></div></section>
+    <section><div class="card toolbar"><button id="db-fit">전체 보기</button><button id="db-physics" class="active">물리엔진 ON</button><button id="db-fk" class="active">DDL FK</button><button id="db-orm" class="active">ORM 매핑</button><button id="db-join" class="active">SQL JOIN 추론</button></div><div id="db-network" style="height:68vh;margin-top:10px;background:#050c16;border:1px solid #263854;border-radius:12px"></div><div id="db-fallback" class="card" hidden></div></section>
     <aside class="card" style="height:max-content;position:sticky;top:12px"><h3 style="margin-top:0">관계 상세</h3><div id="db-relation-detail" class="muted">테이블 또는 관계선을 클릭하세요.</div></aside>
   </div>
-  <h2>관계 근거 전체</h2>${table(["프로젝트", "구분", "출발 테이블·컬럼", "대상 테이블·컬럼", "신뢰도", "파일:라인", "근거"], rows)}
+  ${derivedSection}
+  <h2>관계 근거 전체</h2>${table(["프로젝트", "구분", "다중성", "출발 테이블·컬럼", "대상 테이블·컬럼", "다중성 판정 근거", "신뢰도", "파일:라인", "근거"], rows)}
   <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script><script>
-  (function(){const RAW=${scriptJson(graph)},esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const detail=document.getElementById('db-relation-detail'),fallback=document.getElementById('db-fallback');let network,nodes,edges,physics=true,showFk=true,showJoin=true;
-  function relationText(e){const from=e.from_table+(e.from_columns?.length?'.'+e.from_columns.join(','):'');const to=e.to_table+(e.to_columns?.length?'.'+e.to_columns.join(','):'');const location=(e.file||'')+(e.line?':'+e.line:'');return '<span class="badge '+(e.relation_type==='query_join'?'medium':'high')+'">'+esc(e.label)+'</span><h3 class="node-detail-title">'+esc(from)+' → '+esc(to)+'</h3><p><b>신뢰도</b> '+esc(e.confidence||'-')+'</p>'+(location?'<p><b>근거 위치</b><br><code>'+esc(location)+'</code></p>':'')+(e.evidence?'<div class="node-signature"><b>추출 근거</b><br>'+esc(e.evidence)+'</div>':'')+'<p class="muted">'+(e.relation_type==='query_join'?'SQL의 컬럼 동등 JOIN 조건에서 추론한 논리 관계이며 물리 FK를 뜻하지 않습니다.':'DDL에 선언된 FOREIGN KEY 관계입니다.')+'</p>';}
+  (function(){const RAW=${scriptJson(graph)},esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const detail=document.getElementById('db-relation-detail'),fallback=document.getElementById('db-fallback');let network,nodes,edges,physics=true,showFk=true,showJoin=true,showOrm=true;
+  const ORIGIN_NOTE={query_join:'SQL의 컬럼 동등 JOIN 조건에서 추론한 논리 관계이며 물리 FK를 뜻하지 않습니다.',orm_relation:'ORM 매핑 애노테이션에 선언된 관계입니다. 다중성은 애노테이션 종류에서 그대로 읽었습니다.',foreign_key:'DDL에 선언된 FOREIGN KEY 관계입니다.'};
+  function relationText(e){const from=e.from_table+(e.from_columns?.length?'.'+e.from_columns.join(','):'');const to=e.to_table+(e.to_columns?.length?'.'+e.to_columns.join(','):'');const location=(e.file||'')+(e.line?':'+e.line:'');const resolved=e.cardinality&&e.cardinality!=='unknown';return '<span class="badge '+(e.relation_type==='query_join'?'medium':'high')+'">'+esc(e.relation_label||e.label)+'</span> <span class="badge '+(resolved?'high':'medium')+'">'+esc(e.cardinality_label||'다중성 미확정')+'</span><h3 class="node-detail-title">'+esc(from)+' → '+esc(to)+'</h3><p><b>다중성</b> '+esc(e.cardinality_label||'-')+(e.framework?' · <b>ORM</b> '+esc(e.framework):'')+'</p>'+(e.cardinality_basis?'<p><b>다중성 판정 근거</b><br>'+esc(e.cardinality_basis)+'</p>':'')+'<p><b>신뢰도</b> '+esc(e.confidence||'-')+'</p>'+(location?'<p><b>근거 위치</b><br><code>'+esc(location)+'</code></p>':'')+(e.evidence?'<div class="node-signature"><b>추출 근거</b><br>'+esc(e.evidence)+'</div>':'')+'<p class="muted">'+(ORIGIN_NOTE[e.relation_type]||ORIGIN_NOTE.foreign_key)+'</p>';}
   function tableText(id){const node=RAW.nodes.find(n=>n.id===id),related=RAW.edges.filter(e=>e.from===id||e.to===id);return '<h3 class="node-detail-title">'+esc(node?.label||id)+'</h3><p><span class="badge">'+esc(node?.project||'-')+'</span> 연결 관계 '+related.length+'개</p><ul class="relation-list">'+related.map(e=>'<li>'+relationText(e)+'</li>').join('')+'</ul>';}
-  function filters(){if(!edges)return;edges.update(RAW.edges.map(e=>({id:e.id,hidden:e.relation_type==='query_join'?!showJoin:!showFk})));}
+  function filters(){if(!edges)return;const visible=t=>t==='query_join'?showJoin:t==='orm_relation'?showOrm:showFk;edges.update(RAW.edges.map(e=>({id:e.id,hidden:!visible(e.relation_type)})));}
   if(!window.vis){fallback.hidden=false;fallback.textContent='vis-network CDN을 불러오지 못했습니다. 아래 관계 근거 표에서 전체 관계를 확인할 수 있습니다.';}
   else{nodes=new vis.DataSet(RAW.nodes.map(n=>({...n,shape:'box',color:{background:'#182b3a',border:'#4493f8'},font:{color:'#e6edf3'}})));edges=new vis.DataSet(RAW.edges.map(e=>({...e,font:{color:'#c8d6e5',size:10}})));network=new vis.Network(document.getElementById('db-network'),{nodes,edges},{physics:{stabilization:false},interaction:{hover:true},edges:{smooth:{type:'dynamic'}}});network.on('click',p=>{if(p.edges.length&&!p.nodes.length){const edge=RAW.edges.find(e=>e.id===p.edges[0]);if(edge){detail.classList.remove('muted');detail.innerHTML=relationText(edge);}}else if(p.nodes.length){detail.classList.remove('muted');detail.innerHTML=tableText(p.nodes[0]);}});}
-  document.getElementById('db-fit').addEventListener('click',()=>network?.fit({animation:true}));document.getElementById('db-physics').addEventListener('click',function(){physics=!physics;this.textContent='물리엔진 '+(physics?'ON':'OFF');this.classList.toggle('active',physics);network?.setOptions({physics:{enabled:physics}});});document.getElementById('db-fk').addEventListener('click',function(){showFk=!showFk;this.classList.toggle('active',showFk);filters();});document.getElementById('db-join').addEventListener('click',function(){showJoin=!showJoin;this.classList.toggle('active',showJoin);filters();});
+  document.getElementById('db-fit').addEventListener('click',()=>network?.fit({animation:true}));document.getElementById('db-physics').addEventListener('click',function(){physics=!physics;this.textContent='물리엔진 '+(physics?'ON':'OFF');this.classList.toggle('active',physics);network?.setOptions({physics:{enabled:physics}});});document.getElementById('db-fk').addEventListener('click',function(){showFk=!showFk;this.classList.toggle('active',showFk);filters();});document.getElementById('db-orm').addEventListener('click',function(){showOrm=!showOrm;this.classList.toggle('active',showOrm);filters();});document.getElementById('db-join').addEventListener('click',function(){showJoin=!showJoin;this.classList.toggle('active',showJoin);filters();});
   })();
   </script>`;
 }
@@ -1330,16 +1399,28 @@ function renderWiki(projects, owner, system, pairRefresh = null) {
   return { status: overallStatus, render_status: "PASS", analysis_coverage_status: analysisCoverageStatus, api_contract_status: apiContractStatus, pair_refresh_status: pairRefresh?.status || "NOT_APPLICABLE", narrative_status: narrativeStatus.status, narrative_evidence: narrativeStatus.evidenceCount, narrative_findings: narrativeStatus.findings.length, mode: system ? "system" : "full", owner, wiki: wikiDir, projects: projects.map((p) => p.root), pages: pages.length, markdown_documents: documents.length, index_artifacts: indexArtifactCount, graph_nodes: graph.nodes.length, graph_edges: graph.edges.length, graph_hubs: graph.nodes.filter((node) => node.hub).length, api_contract_edges: apiEdges, api_endpoints: api.endpoints.length, api_consumers: api.consumers.length, api_unmatched_consumers: api.unmatchedConsumers.length, api_unmatched_endpoints: api.unmatchedEndpoints.length, search_items: search.items.length, ai_calls: narrativeStatus.aiCalls };
 }
 
-export function buildWiki({ root = null, backend = null, frontend = null, client = null, consumer = null } = {}) {
-  const clientInput = frontend || client || consumer;
-  const system = Boolean(backend && clientInput);
-  const backendRoot = system ? resolve(backend) : null; const consumerRoot = system ? resolve(clientInput) : null;
-  const pairRefresh = system ? refreshPair({ backend: backendRoot, consumer: consumerRoot }) : null;
-  const projects = system ? [loadProject(backendRoot, "backend", "backend"), loadProject(consumerRoot, clientProjectId(consumerRoot), "client")] : [loadProject(resolve(root), "root", "project")];
+export function buildWiki({ root = null, backend = null, frontend = null, frontends = null, client = null, consumer = null } = {}) {
+  const clientInputs = (frontends?.length ? frontends : [frontend || client || consumer].filter(Boolean)).map((item) => resolve(item));
+  const system = Boolean(backend && clientInputs.length);
+  const backendRoot = system ? resolve(backend) : null;
+  const pairRefresh = system ? refreshPair({ backend: backendRoot, consumers: clientInputs }) : null;
+  // 클라이언트가 여러 개면 프로젝트 ID가 겹칠 수 있어 중복 시 경로 basename을 덧붙인다.
+  const usedIds = new Set(["backend"]);
+  const uniqueClientId = (clientRoot) => {
+    const base = clientProjectId(clientRoot);
+    if (!usedIds.has(base)) { usedIds.add(base); return base; }
+    let candidate = `${base}-${basename(clientRoot)}`;
+    let suffix = 2;
+    while (usedIds.has(candidate)) { candidate = `${base}-${basename(clientRoot)}-${suffix}`; suffix += 1; }
+    usedIds.add(candidate); return candidate;
+  };
+  const projects = system
+    ? [loadProject(backendRoot, "backend", "backend"), ...clientInputs.map((clientRoot) => loadProject(clientRoot, uniqueClientId(clientRoot), "client"))]
+    : [loadProject(resolve(root), "root", "project")];
   return renderWiki(projects, system ? backendRoot : resolve(root), system, pairRefresh);
 }
 
-function help() { return "AX-Harness deterministic wiki\n\n단일: node scripts/build-wiki.mjs --root <project>\npair: node scripts/build-wiki.mjs --backend <server> --frontend <client>\n호환 별칭: --client, --consumer\n"; }
+function help() { return "AX-Harness deterministic wiki\n\n단일: node scripts/build-wiki.mjs --root <project>\npair(1:1): node scripts/build-wiki.mjs --backend <server> --frontend <client>\npair(1:N): node scripts/build-wiki.mjs --backend <server> --frontend <web> --frontend <mobile>\n호환 별칭: --client, --consumer\n"; }
 
 function main() {
   try {

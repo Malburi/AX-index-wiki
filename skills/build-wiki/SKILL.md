@@ -64,7 +64,7 @@ node "[plugin-root]/scripts/build-wiki.mjs" --root "[project-root]"
 
 ### pair 시스템
 
-`_workspace/pair_config.md`가 있으면 양쪽 설정이 서로를 가리키고 validator FAIL이 없는지 확인한다. 선택지를 묻지 않고 다음 명령 한 번만 실행한다. 이 명령은 내부에서 backend → client → backend 증분 refresh와 API drift 재검증을 먼저 수행한 뒤 최신 인덱스로 위키를 렌더링한다. 별도 refresh 명령을 선행하지 않는다.
+`_workspace/pair_config.md`가 있으면 설정이 서로를 가리키고 validator FAIL이 없는지 확인한다. 선택지를 묻지 않고 다음 명령 한 번만 실행한다. 이 명령은 내부에서 backend → 각 client → backend 증분 refresh와 API drift 재검증을 먼저 수행한 뒤 최신 인덱스로 위키를 렌더링한다. 별도 refresh 명령을 선행하지 않는다.
 
 ```bash
 node "[plugin-root]/scripts/build-wiki.mjs" \
@@ -72,13 +72,23 @@ node "[plugin-root]/scripts/build-wiki.mjs" \
   --frontend "[frontend-root]"
 ```
 
-desktop/mobile은 `--client`를 사용한다. 기존 자동화의 `--consumer`는 호환 별칭으로만 허용하며 신규 안내와 사용자 화면에는 노출하지 않는다.
+백엔드 1개에 분리된 클라이언트가 여러 개(1:N)면 `--frontend`를 반복한다. backend `pair_config.md`의 `## 파트너 목록` 표에 있는 클라이언트를 전부 전달한다.
+
+```bash
+node "[plugin-root]/scripts/build-wiki.mjs" \
+  --backend "[backend-root]" \
+  --frontend "[web-root]" \
+  --frontend "[mobile-root]"
+```
+
+desktop/mobile도 같은 `--frontend`를 쓴다. `--client`·`--consumer`는 호환 별칭으로만 허용하며 신규 안내와 사용자 화면에는 노출하지 않는다.
 
 불변 계약:
 
 - backend·client 로컬 위키를 따로 만들지 않는다.
-- 정본은 `[backend-root]/.claude/wiki/` 하나다.
+- 정본은 `[backend-root]/.claude/wiki/` 하나다. 클라이언트가 몇 개든 위키는 1개다.
 - client root에는 쓰지 않는다.
+- 클라이언트마다 `pages/repositories/<client-id>.html`을 만들고, 한 클라이언트만 계약 미매칭이어도 종합 상태를 WARN으로 보고한다.
 - node id는 `<project-id>::<original-id>`로 구분한다.
 - `api_contract` edge로 client call → backend endpoint를 연결한다.
 - FastAPI는 `include_router`의 import 대상, `APIRouter(prefix=...)`, 정적으로 확정 가능한 설정/f-string prefix와 route path를 합성한다.

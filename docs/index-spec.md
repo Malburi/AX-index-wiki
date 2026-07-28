@@ -225,6 +225,13 @@ DB 스키마 스냅샷.
       "row_count_estimate": 1234567
     }
   ],
+  "entities": [
+    {
+      "name": "Order", "table": "TBL_ORDER", "table_resolved": true, "framework": "jpa",
+      "file": "src/main/java/com/example/Order.java", "line": 12,
+      "origin": "deterministic-indexer", "confidence": "HIGH"
+    }
+  ],
   "relations": [
     {
       "type": "foreign_key",
@@ -233,6 +240,8 @@ DB 스키마 스냅샷.
       "from_columns": ["USER_ID"],
       "to_table": "TBL_USER",
       "to_columns": ["USER_ID"],
+      "cardinality": "many_to_one",
+      "cardinality_basis": "fk_columns_not_unique: 자식 쪽 유일 제약 없음",
       "file": "db/schema.sql",
       "evidence": "DDL FOREIGN KEY",
       "origin": "deterministic-indexer",
@@ -244,12 +253,41 @@ DB 스키마 스냅샷.
       "from_columns": ["USER_ID"],
       "to_table": "TBL_USER",
       "to_columns": ["USER_ID"],
+      "cardinality": "many_to_one",
+      "cardinality_basis": "TBL_ORDER: 유일 제약 없음 / TBL_USER: PRIMARY KEY (USER_ID)",
       "sql_id": "com.example.OrderMapper.findOrders",
       "file": "src/main/resources/mapper/OrderMapper.xml",
       "line": 42,
       "evidence": "O.USER_ID = U.USER_ID",
       "origin": "deterministic-indexer",
       "confidence": "MEDIUM"
+    },
+    {
+      "type": "orm_relation",
+      "from_table": "TBL_USER",
+      "from_columns": [],
+      "to_table": "TBL_ORDER",
+      "to_columns": [],
+      "from_entity": "User", "to_entity": "Order",
+      "cardinality": "one_to_many",
+      "cardinality_basis": "orm_annotation: @OneToMany",
+      "framework": "jpa", "owning_side": false,
+      "file": "src/main/java/com/example/User.java", "line": 20,
+      "evidence": "@OneToMany(mappedBy = \"user\")",
+      "origin": "deterministic-indexer",
+      "confidence": "HIGH"
+    }
+  ],
+  "derived_relations": [
+    {
+      "type": "many_to_many", "cardinality": "many_to_many",
+      "from_table": "TBL_ORDER", "from_columns": ["ORDER_ID"],
+      "to_table": "TBL_PRODUCT", "to_columns": ["PRODUCT_ID"],
+      "via_table": "TBL_ORDER_ITEM", "via_columns": ["ORDER_ID", "PRODUCT_ID"],
+      "cardinality_basis": "join_table:primary_key",
+      "file": "db/schema.sql",
+      "evidence": "TBL_ORDER_ITEM 조인 테이블 (PRIMARY KEY (ORDER_ID, PRODUCT_ID))",
+      "origin": "deterministic-indexer", "confidence": "MEDIUM"
     }
   ],
   "views": [...],
@@ -259,7 +297,25 @@ DB 스키마 스냅샷.
 }
 ```
 
-`relations`는 관계도를 위한 정규화된 전체 관계 배열이다. `foreign_key`는 DDL에 선언된 물리 FK이므로 기본 신뢰도 `HIGH`, `query_join`은 MyBatis·annotation·raw SQL의 `alias.column = alias.column` 조건에서 추론한 논리 관계이므로 기본 신뢰도 `MEDIUM`이다. 논리 JOIN을 물리 FK로 표현하지 않는다. 위키는 두 타입을 실선/점선으로 구분하고 모든 `file:line`·SQL 조건 근거를 표에 보존한다.
+`relations`는 관계도를 위한 정규화된 전체 관계 배열이다. `foreign_key`는 DDL에 선언된 물리 FK이므로 기본 신뢰도 `HIGH`, `orm_relation`은 소스의 매핑 애노테이션에 선언된 관계이므로 `HIGH`, `query_join`은 MyBatis·annotation·raw SQL의 `alias.column = alias.column` 조건에서 추론한 논리 관계이므로 기본 신뢰도 `MEDIUM`이다. 논리 JOIN을 물리 FK로 표현하지 않는다. 위키는 세 타입을 실선(FK)/파선(ORM)/점선(JOIN)으로 구분하고 모든 `file:line`·SQL 조건 근거를 표에 보존한다.
+
+### 관계 다중성 (cardinality)
+
+`cardinality`는 항상 **`from_table` → `to_table` 방향**의 다중성이며 `one_to_one|one_to_many|many_to_one|many_to_many|unknown` 중 하나다. `cardinality_basis`에 판정 근거를 문자열로 남긴다. 근거가 없으면 임의로 추정하지 않고 `unknown`을 기록한다.
+
+| 관계 타입 | 판정 규칙 |
+|---|---|
+| `foreign_key` | 참조 대상 컬럼은 SQL 규칙상 유일하므로 **자식(from) 쪽 FK 컬럼의 유일성**만 본다. PK·`UNIQUE` 제약·`UNIQUE INDEX`·컬럼 레벨 `UNIQUE`로 덮이면 `one_to_one`, 아니면 `many_to_one`. 자식 테이블 DDL이 없으면 `unknown` |
+| `query_join` | 양쪽 컬럼 집합의 유일성을 각각 확인해 (유일,유일)=`one_to_one`, (비유일,유일)=`many_to_one`, (유일,비유일)=`one_to_many`, (비유일,비유일)=`many_to_many`. 한쪽 테이블이라도 DDL에 없으면 `unknown` |
+| `orm_relation` | 애노테이션이 다중성을 직접 표현한다. `@OneToOne`/`OneToOneField`/`uselist=False`/`unique=True ForeignKey`=`one_to_one`, `@OneToMany`/`hasMany`=`one_to_many`, `@ManyToOne`/`ForeignKey`/`belongsTo`=`many_to_one`, `@ManyToMany`/`ManyToManyField`/`secondary=`=`many_to_many`. SQLAlchemy의 옵션 없는 `relationship()`은 방향을 확정할 수 없어 `unknown` + `confidence: LOW` |
+
+**N:M 파생** — 외래키가 2개 이상인 테이블에서 FK 컬럼 합집합이 그 테이블에서 유일하면 조인 테이블로 판정하고 `tables[].join_table: true`를 기록한 뒤, 양쪽 부모의 `many_to_many` 관계를 `derived_relations[]`에 파생 기록한다. 물리 FK 선언 자체는 각각 `many_to_one`으로 `relations[]`에 그대로 남기며, 파생 관계를 `relations[]`에 섞지 않는다.
+
+### ORM 엔티티 매핑 (entities)
+
+`entities[]`는 엔티티 클래스 → 물리 테이블 매핑이다. `@Table(name=)`·`@Entity("x")`·`__tablename__`·`Meta.db_table`로 테이블명이 확정되면 `table_resolved: true`, 없으면 클래스명을 테이블명으로 쓰고 `table_resolved: false`로 표시한다. 지원 프레임워크는 `jpa`(Java/Kotlin), `sqlalchemy`·`django`(Python), `typeorm`·`sequelize`(TS/JS)다.
+
+DDL이 전혀 없는 프로젝트도 ORM 관계만으로 `schema.json`이 생성된다(`tables: []` + `entities`/`relations` 채움).
 
 `source` 값:
 - `live_db` — 운영/스테이징 DB read-only 직접 조회

@@ -1,6 +1,7 @@
 // 최소 테스트 러너 (무의존). 실행: node scripts/tests/run.js
 import { test as registerIndexerTests } from "./build-index.test.mjs";
 import { test as registerValidatorTests } from "./validate-harness.test.mjs";
+import { test as registerRelationTests } from "./relations.test.mjs";
 
 const tests = [];
 function test(name, fn) {
@@ -18,6 +19,7 @@ const assert = {
 
 await registerIndexerTests(test, assert);
 await registerValidatorTests(test, assert);
+await registerRelationTests(test, assert);
 
 let passed = 0,
   failed = 0;

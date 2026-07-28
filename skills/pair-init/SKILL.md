@@ -104,6 +104,31 @@ linked_at: [YYYY-MM-DD]
 
 필드는 `scripts/refresh-pair-index.mjs`와 `scripts/build-wiki.mjs`(pair 모드)가 참조하는 표준 형식이다 — 필드명을 임의로 바꾸지 않는다.
 
+### 백엔드 1개 : 클라이언트 N개(1:N)
+
+한 백엔드에 분리된 클라이언트가 둘 이상이면 backend 쪽 `pair_config.md`에 단수 `partner_*` 필드 대신 **파트너 목록 표**를 기록한다. 각 클라이언트 쪽은 단수 필드로 backend 하나만 가리키므로 형식이 그대로다.
+
+```markdown
+# Pair Configuration
+
+project_type: backend
+system_wiki_owner: backend
+system_wiki_root: [backend 절대경로]/.claude/wiki
+linked_at: [YYYY-MM-DD]
+
+## 파트너 목록
+
+| id | type | root | api_contract | stack |
+|---|---|---|---|---|
+| frontend | frontend | [절대경로] | [절대경로]/_workspace/index/api_contracts.json | Vue 3 |
+| mobile | mobile | [절대경로] | [절대경로]/_workspace/index/api_contracts.json | Android |
+```
+
+- `id`는 `frontend|desktop|mobile` 같은 실제 역할을 쓰고 중복되지 않게 한다.
+- 단수 `partner_root:`와 표를 함께 쓰면 단수 필드가 첫 파트너로 취급되고 표의 나머지가 추가된다(경로 중복은 자동 제거).
+- 표만 쓰는 1:N 설정도 단수 필드만 쓰는 기존 1:1 설정도 모두 동작한다.
+- 클라이언트를 추가할 때는 표에 행을 추가하고 새 클라이언트 쪽에 역방향 단수 설정을 만든 뒤 Phase 3를 다시 실행한다. 기존 클라이언트 설정은 건드리지 않는다.
+
 ### 파트너 프로젝트 최종 내용 (역방향)
 
 같은 스키마에서 `project_type`/`partner_type`, `partner_root`/상대 계약 경로를 뒤집어 기록한다. `system_wiki_owner`와 `system_wiki_root`는 양쪽에서 동일하게 backend의 `.claude/wiki/`를 가리킨다. pair 위키는 저장소별로 만들지 않고 이 정본 위치에만 생성한다. 파트너 쓰기 권한이 없으면 Phase 0에서 중단했어야 하며, 이 단계에서 현재 프로젝트만 저장하고 계속 진행하지 않는다.
@@ -117,17 +142,29 @@ linked_at: [YYYY-MM-DD]
 ```bash
 node "[plugin-root]/scripts/refresh-pair-index.mjs" \
   --backend "[backend 절대경로]" \
-  --consumer "[frontend|desktop|mobile 절대경로]"
+  --frontend "[frontend|desktop|mobile 절대경로]"
 ```
 
-`--consumer`는 refresh 스크립트의 하위 호환 내부 옵션명이다. 사용자 질문·프로젝트 ID·작업 제목·결과 보고에서는 실제 역할인 `frontend|desktop|mobile`을 사용한다.
+클라이언트가 여러 개(1:N)면 `--frontend`를 반복한다.
+
+```bash
+node "[plugin-root]/scripts/refresh-pair-index.mjs" \
+  --backend "[backend 절대경로]" \
+  --frontend "[web 절대경로]" \
+  --frontend "[mobile 절대경로]"
+```
+
+`--consumer`·`--client`는 같은 옵션의 하위 호환 별칭이다. 사용자 질문·프로젝트 ID·작업 제목·결과 보고에서는 실제 역할인 `frontend|desktop|mobile`을 사용한다.
 
 스크립트는 다음 순서를 지킨다.
 
 1. backend incremental index — 로컬 endpoint 계약 생성
-2. client incremental index — backend 계약을 읽어 클라이언트 호출과 전수 매칭
-3. backend incremental index — client 계약을 역방향 반영
-4. client `_workspace/api_drift_report.md`와 `pair_refresh_result.json` 기록
+2. 각 client incremental index — backend 계약을 읽어 클라이언트 호출과 전수 매칭
+3. backend incremental index — 모든 client 계약을 역방향 반영
+4. client별 `_workspace/api_drift_report.md`와 `pair_refresh_result.json` 기록
+5. backend `_workspace/api_drift_summary.md`와 `pair_refresh_result.json`에 클라이언트별 표와 종합 판정 기록
+
+`pair_config.md`의 파트너 목록에 없는 클라이언트를 인자로 주면 실행은 되지만 `undeclared_clients`로 보고되므로 표에 추가해야 다음 실행에서 자동 인식된다.
 
 기존 `_ai_patch.json`은 incremental 인덱싱에서 유효 node에만 다시 적용한다. API 계약 추출과 drift 검증에 AI 에이전트를 호출하지 않는다 — 전 과정이 결정적이다.
 
@@ -161,28 +198,29 @@ node "[plugin-root]/scripts/refresh-pair-index.mjs" \
 ## Phase 5: 결과 보고
 
 ```
-페어 설정 완료
+페어 설정 완료 (토폴로지: 1:1 | 1:N — 클라이언트 [N]개)
 
 Backend:  [경로] ([스택])
 Client:   [경로] ([frontend|desktop|mobile] / [스택])
+          ... 클라이언트마다 한 줄
 API base: [url]
 
 API 계약 추출: [성공/실패]
   엔드포인트: N개 (공개 A개 | 인증 B개)
   저장: [백엔드]/_workspace/index/api_contracts.json
 
-API 드리프트 검증: [실행됨/스킵]
-  🔴 MISSING_ENDPOINT: N건
-  🟡 METHOD_MISMATCH/PATH_MISMATCH: N건
-  🟢 UNUSED_ENDPOINT: N건 (정보성)
-  상세: [client]/_workspace/api_drift_report.md
+API 드리프트 검증: [실행됨/스킵]  종합 [PASS|WARN]
+  | 클라이언트 | 상태 | endpoint | 호출 | 매칭 | 미매칭 |
+  ... refresh 결과의 클라이언트별 행을 그대로 표시
+  클라이언트별 상세: [client]/_workspace/api_drift_report.md
+  종합 요약: [백엔드]/_workspace/api_drift_summary.md
 
 이제 가능한 작업:
-  "시스템 위키 만들어줘"     → build-wiki (양쪽을 합친 단일 위키, backend 정본)
+  "시스템 위키 만들어줘"     → build-wiki (모든 클라이언트를 합친 단일 위키, backend 정본)
   "API 드리프트 다시 확인"   → 결정적 pair refresh (refresh-pair-index.mjs)
 ```
 
-HIGH 등급 드리프트가 있으면 "즉시 수정 권장" 항목을 명시적으로 안내.
+미매칭이 있는 클라이언트는 어느 쪽인지 반드시 이름과 함께 보고한다. 1:N에서 한 클라이언트만 WARN이어도 종합 상태는 WARN이며, 정상 클라이언트를 근거로 전체를 PASS로 보고하지 않는다.
 
 ---
 
